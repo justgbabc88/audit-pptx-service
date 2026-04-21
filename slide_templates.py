@@ -22,6 +22,8 @@ Fixes applied vs. prior version:
     overlap even for long copy.
 """
 
+import os
+
 from pptx import Presentation
 from pptx.util import Inches, Pt, Emu
 from pptx.dml.color import RGBColor
@@ -60,6 +62,14 @@ C_FUNNEL_BAR   = RGBColor(0x7B, 0x5E, 0xA7)
 # Slide dimensions
 W = Inches(13.33)
 H = Inches(7.5)
+
+# Watermark
+LOGO_PATH = os.path.join(os.path.dirname(__file__), "logo-full-dark.png")
+# Native pixel dimensions of logo-full-dark.png (used to preserve aspect ratio)
+LOGO_PX_W = 753
+LOGO_PX_H = 185
+# Faint opacity for the watermark (0.0–1.0). 0.10 ≈ 10% opacity.
+WATERMARK_OPACITY = 0.10
 
 # Margins
 LM = Inches(0.6)
@@ -327,6 +337,42 @@ def add_circle(slide, cx, cy, diameter, fill_color, text, text_color=C_WHITE,
     tf.word_wrap = False
     shape.text_frame.vertical_anchor = MSO_ANCHOR.MIDDLE
     return shape
+
+
+def add_logo_watermark(slide, image_path=LOGO_PATH, opacity=WATERMARK_OPACITY,
+                       width_in=5.5):
+    """Place a faint, centered logo-full-dark.png watermark on the slide.
+
+    The image is faded via the OOXML <a:alphaModFix> element (no Pillow
+    dependency required) and then re-positioned in the slide's z-order so
+    it sits just above the slide background but behind any content shapes.
+    """
+    if not os.path.exists(image_path):
+        return None
+
+    wm_w = Inches(width_in)
+    wm_h = Emu(int(wm_w * LOGO_PX_H / LOGO_PX_W))
+    left = int((W - wm_w) / 2)
+    top  = int((H - wm_h) / 2)
+
+    pic = slide.shapes.add_picture(image_path, left, top, width=wm_w, height=wm_h)
+
+    # Fade the picture by setting a fixed alpha on the underlying blip.
+    # alphaModFix amt is in 1000ths of a percent (100000 == 100%).
+    blipFill = pic._element.find(_qn('p:blipFill'))
+    if blipFill is not None:
+        blip = blipFill.find(_qn('a:blip'))
+        if blip is not None:
+            alphaModFix = etree.SubElement(blip, _qn('a:alphaModFix'))
+            alphaModFix.set('amt', str(int(opacity * 100000)))
+
+    # Send the watermark behind other content. The first real shape on every
+    # slide here is the full-bleed background rect, so insert immediately
+    # after it (index 3 of spTree: nvGrpSpPr, grpSpPr, background, …).
+    spTree = pic._element.getparent()
+    spTree.remove(pic._element)
+    spTree.insert(3, pic._element)
+    return pic
 
 
 # ─────────────────────────────────────────────
@@ -1559,6 +1605,9 @@ def generate(data, output_path="output.pptx"):
     slide_implementation(prs, data, current_slide);   current_slide += 1
     slide_next_steps(prs, data, current_slide);       current_slide += 1
     slide_closing(prs, data, current_slide)
+
+    for slide in prs.slides:
+        add_logo_watermark(slide)
 
     prs.save(output_path)
     print(f"\u2713 Saved: {output_path}  ({current_slide} slides)")
