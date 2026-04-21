@@ -1,22 +1,32 @@
 """
-Revenue Leak Audit — Slide Templates
-=====================================
-Every slide is a self-contained function.
-Call generate(data) to produce a complete .pptx from a data dictionary.
-
-Usage:
-    from slide_templates import generate
-    generate(data, "output.pptx")
-
-Data dictionary keys are documented in DATA_SCHEMA at the bottom of this file.
+Revenue Leak Audit — Slide Templates  (FIXED spacing)
+=====================================================
+Fixes applied vs. prior version:
+  • Titles no longer crowd downstream content when they wrap to 2 lines.
+    Each affected slide reserves ~1.6" of vertical space for the title and
+    anchors everything below off the same constant (TITLE_BOTTOM).
+  • Slide 10 (AI Readiness) key findings block is shortened/capped so it
+    does not overflow into the footer — findings are truncated to 2 lines
+    of wrap each and the block fits within the slide.
+  • System slides (18–20): step cards are taller and text is clamped;
+    the right-column first card's metric number no longer rides up on
+    top of its label (vertical split fixed).
+  • Revenue summary slide: KPI card values shrink if too long and wider
+    column for "Overall ROI" so "4.4x return" never clips.
+  • Guarantee math box lines now correctly show values in green.
+  • Implementation slide phase titles: font auto-shrinks for multi-line
+    titles and the items shift down so the first item never collides
+    with a wrapped title.
+  • Closing slide: safe multi-line rendering (no literal \\n in the text)
+    and the urgency line + CTA are on separate y-bands that can't
+    overlap even for long copy.
 """
 
 from pptx import Presentation
 from pptx.util import Inches, Pt, Emu
 from pptx.dml.color import RGBColor
-from pptx.enum.text import PP_ALIGN
+from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
 from pptx.oxml.ns import qn as _qn
-from pptx.util import Pt
 import copy
 from lxml import etree
 
@@ -28,33 +38,40 @@ def qn(tag):
 # ─────────────────────────────────────────────
 
 # Colors
-C_DARK_BG      = RGBColor(0x1C, 0x1B, 0x2E)   # near-black navy
-C_LIGHT_BG     = RGBColor(0xFF, 0xF8, 0xF0)   # warm cream
-C_PURPLE       = RGBColor(0x7B, 0x5E, 0xA7)   # purple accent
-C_GREEN        = RGBColor(0x00, 0xC3, 0x89)   # green highlight
-C_RED          = RGBColor(0xE6, 0x39, 0x46)   # red accent
+C_DARK_BG      = RGBColor(0x1C, 0x1B, 0x2E)
+C_LIGHT_BG     = RGBColor(0xFF, 0xF8, 0xF0)
+C_PURPLE       = RGBColor(0x7B, 0x5E, 0xA7)
+C_GREEN        = RGBColor(0x00, 0xC3, 0x89)
+C_RED          = RGBColor(0xE6, 0x39, 0x46)
 C_WHITE        = RGBColor(0xFF, 0xFF, 0xFF)
 C_DARK_TEXT    = RGBColor(0x1C, 0x1B, 0x2E)
 C_MUTED        = RGBColor(0x99, 0x99, 0x99)
 C_CARD_BG      = RGBColor(0xFF, 0xFF, 0xFF)
-C_HIGHLIGHT    = RGBColor(0xEE, 0xF0, 0xFF)   # very light purple-blue
+C_HIGHLIGHT    = RGBColor(0xEE, 0xF0, 0xFF)
 C_AMBER        = RGBColor(0xE0, 0x7B, 0x00)
-C_DARK_CARD    = RGBColor(0x2A, 0x28, 0x45)   # slightly lighter than bg for dark cards
-C_SCORE_RED    = RGBColor(0xCC, 0x22, 0x22)   # score circle red
+C_DARK_CARD    = RGBColor(0x2A, 0x28, 0x45)
+C_SCORE_RED    = RGBColor(0xCC, 0x22, 0x22)
 C_GREEN_BADGE  = RGBColor(0x00, 0x99, 0x55)
 C_AMBER_BADGE  = RGBColor(0xE0, 0x7B, 0x00)
 C_RED_BADGE    = RGBColor(0xCC, 0x22, 0x22)
-C_TEAL         = RGBColor(0x00, 0xC3, 0x89)   # same as green, used for guarantee borders
-C_FUNNEL_BAR   = RGBColor(0x7B, 0x5E, 0xA7)   # purple funnel bars
+C_TEAL         = RGBColor(0x00, 0xC3, 0x89)
+C_FUNNEL_BAR   = RGBColor(0x7B, 0x5E, 0xA7)
 
 # Slide dimensions
 W = Inches(13.33)
 H = Inches(7.5)
 
 # Margins
-LM = Inches(0.6)   # left margin
-RM = Inches(0.6)   # right margin
-TM = Inches(0.5)   # top margin (below accent bar)
+LM = Inches(0.6)
+RM = Inches(0.6)
+TM = Inches(0.5)
+
+# Vertical rhythm — single source of truth for section start after the title
+# block. Every light-BG content slide uses these so a wrapping title cannot
+# shove content into the next block.
+TITLE_TOP       = Inches(0.72)
+TITLE_BLOCK_H   = Inches(1.5)   # reserves room for a 2-line title at 36pt
+CONTENT_TOP     = TITLE_TOP + TITLE_BLOCK_H  # ≈ 2.22"
 
 
 # ─────────────────────────────────────────────
@@ -62,13 +79,11 @@ TM = Inches(0.5)   # top margin (below accent bar)
 # ─────────────────────────────────────────────
 
 def new_slide(prs):
-    """Add a blank slide and return it."""
-    blank_layout = prs.slide_layouts[6]  # completely blank
+    blank_layout = prs.slide_layouts[6]
     return prs.slides.add_slide(blank_layout)
 
 
 def rgb_fill(shape, color):
-    """Fill a shape with a solid RGB color."""
     fill = shape.fill
     fill.solid()
     fill.fore_color.rgb = color
@@ -79,11 +94,7 @@ def no_fill(shape):
 
 
 def add_rect(slide, left, top, width, height, fill_color=None, line_color=None, line_width=None):
-    """Add a rectangle shape."""
-    shape = slide.shapes.add_shape(
-        1,  # MSO_SHAPE_TYPE.RECTANGLE
-        left, top, width, height
-    )
+    shape = slide.shapes.add_shape(1, left, top, width, height)
     if fill_color:
         rgb_fill(shape, fill_color)
     else:
@@ -98,13 +109,7 @@ def add_rect(slide, left, top, width, height, fill_color=None, line_color=None, 
 
 
 def add_rounded_rect(slide, left, top, width, height, fill_color, radius_pt=6, line_color=None):
-    """Add a rounded rectangle."""
-    from pptx.enum.shapes import MSO_SHAPE_TYPE
-    shape = slide.shapes.add_shape(
-        5,  # ROUNDED_RECTANGLE
-        left, top, width, height
-    )
-    # Set corner radius
+    shape = slide.shapes.add_shape(5, left, top, width, height)
     shape.adjustments[0] = radius_pt / 100.0
     if fill_color:
         rgb_fill(shape, fill_color)
@@ -118,10 +123,22 @@ def add_rounded_rect(slide, left, top, width, height, fill_color, radius_pt=6, l
     return shape
 
 
+def _clean_text(text):
+    """Convert any literal '\\n' sequences into real newlines. Defensive
+    against data that has been JSON-encoded or copy-pasted with backslashes.
+    """
+    if text is None:
+        return ""
+    if not isinstance(text, str):
+        text = str(text)
+    # Replace literal backslash-n with real newline
+    return text.replace("\\n", "\n")
+
+
 def add_textbox(slide, left, top, width, height, text, font_name, font_size,
                 bold=False, italic=False, color=C_DARK_TEXT, align=PP_ALIGN.LEFT,
                 word_wrap=True, line_spacing=None):
-    """Add a text box. \\n in text creates separate paragraphs."""
+    text = _clean_text(text)
     txBox = slide.shapes.add_textbox(left, top, width, height)
     tf = txBox.text_frame
     tf.word_wrap = word_wrap
@@ -146,7 +163,6 @@ def add_textbox(slide, left, top, width, height, text, font_name, font_size,
             spcPts = etree.SubElement(lnSpc, _qn('a:spcPts'))
             spcPts.set('val', str(int(line_spacing * 100)))
 
-    # Remove internal padding
     txBody = txBox.text_frame._txBody
     bodyPr = txBody.find(_qn('a:bodyPr'))
     if bodyPr is not None:
@@ -159,21 +175,17 @@ def add_textbox(slide, left, top, width, height, text, font_name, font_size,
 
 def add_vcenter_text(slide, left, top, width, height, text, font_name, font_size,
                      bold=False, italic=False, color=C_DARK_TEXT, align=PP_ALIGN.CENTER):
+    """Vertically centred text using a real textbox with MSO_ANCHOR.MIDDLE.
+    Previously this used a manual top-pad calculation that drifted as text
+    wrapped; using the built-in vertical anchor is both simpler and reliable.
     """
-    Vertically centres multi-line text within a region using a plain textbox.
-    Calculates top padding so text sits in the middle of the available height.
-    Uses pure black (overrides color param) for maximum legibility on light cards.
-    """
-    lines = text.split('\n')
-    line_height_inches = font_size * 0.0175  # approx inches per pt at 1.25x leading
-    total_text_h = len(lines) * line_height_inches
-    top_pad = max(0, (height.inches if hasattr(height, 'inches') else height / 914400) - total_text_h) / 2
-    adjusted_top = top + Inches(top_pad)
-
-    txBox = slide.shapes.add_textbox(left, adjusted_top, width, height)
+    text = _clean_text(text)
+    txBox = slide.shapes.add_textbox(left, top, width, height)
     tf = txBox.text_frame
     tf.word_wrap = True
+    tf.vertical_anchor = MSO_ANCHOR.MIDDLE
 
+    lines = text.split('\n')
     for i, line in enumerate(lines):
         if i == 0:
             p = tf.paragraphs[0]
@@ -186,9 +198,8 @@ def add_vcenter_text(slide, left, top, width, height, text, font_name, font_size
         run.font.size = Pt(font_size)
         run.font.bold = bold
         run.font.italic = italic
-        run.font.color.rgb = RGBColor(0x00, 0x00, 0x00)  # always pure black
+        run.font.color.rgb = RGBColor(0x00, 0x00, 0x00)  # pure black for legibility
 
-    # Zero internal padding
     txBody = txBox.text_frame._txBody
     bodyPr = txBody.find(_qn('a:bodyPr'))
     if bodyPr is not None:
@@ -200,27 +211,22 @@ def add_vcenter_text(slide, left, top, width, height, text, font_name, font_size
 
 
 def add_accent_bar(slide, dark=True):
-    """Add the full-width purple top accent bar."""
     height = Inches(0.12) if dark else Inches(0.08)
     bar = add_rect(slide, 0, 0, W, height, fill_color=C_PURPLE)
     return bar
 
 
 def add_footer(slide, brand_name, slide_number):
-    """Add standard footer: brand left, slide number right."""
     footer_y = H - Inches(0.35)
     footer_h = Inches(0.25)
-    # Left text
     add_textbox(slide, LM, footer_y, Inches(6), footer_h,
-                f"{brand_name}  ·  Revenue Leak Audit  ·  Confidential",
+                f"{brand_name}  \u00b7  Revenue Leak Audit  \u00b7  Confidential",
                 "Calibri", 10, color=C_MUTED)
-    # Right number
     add_textbox(slide, W - Inches(1.2), footer_y, Inches(0.8), footer_h,
                 str(slide_number), "Calibri", 10, color=C_MUTED, align=PP_ALIGN.RIGHT)
 
 
 def add_section_label(slide, text, left=None, top=Inches(0.45), dark=False):
-    """Add a spaced-caps purple section label."""
     if left is None:
         left = LM
     color = C_PURPLE
@@ -228,17 +234,36 @@ def add_section_label(slide, text, left=None, top=Inches(0.45), dark=False):
                 text, "Arial", 11, bold=True, color=color)
 
 
-def add_title(slide, text, top=Inches(0.78), font_size=40, color=C_DARK_TEXT, width=None):
-    """Add a slide title."""
+def _auto_title_size(text, default=36, base_chars=46, min_size=24):
+    """Shrink title font size if the title is long so it fits on 1-2 lines
+    rather than pushing into the content below."""
+    text = _clean_text(text)
+    # Rough heuristic: if >base_chars characters, scale down proportionally
+    if len(text) <= base_chars:
+        return default
+    scale = base_chars / max(1, len(text))
+    return max(min_size, int(default * scale))
+
+
+def add_title(slide, text, top=TITLE_TOP, font_size=40, color=C_DARK_TEXT,
+              width=None, height=None, auto_shrink=False):
+    """Render a slide title inside a fixed-height block (default TITLE_BLOCK_H).
+    If auto_shrink=True, font size is reduced for long titles so the title
+    fits in the reserved block without overflowing into content below.
+    """
     if width is None:
         width = W - LM - RM
-    add_textbox(slide, LM, top, width, Inches(1.4),
+    if height is None:
+        height = TITLE_BLOCK_H
+    if auto_shrink:
+        font_size = _auto_title_size(text, default=font_size)
+    add_textbox(slide, LM, top, width, height,
                 text, "Georgia", font_size, bold=True, color=color)
 
 
 def set_shape_text(shape, text, font_name, font_size, bold=False, italic=False,
                    color=C_DARK_TEXT, align=PP_ALIGN.LEFT):
-    """Set text on an existing shape's text frame."""
+    text = _clean_text(text)
     tf = shape.text_frame
     tf.clear()
     p = tf.paragraphs[0]
@@ -252,17 +277,10 @@ def set_shape_text(shape, text, font_name, font_size, bold=False, italic=False,
     run.font.color.rgb = color
 
 
-def add_multi_para_textbox(slide, left, top, width, height, paragraphs,
-                            word_wrap=True):
-    """
-    Add a textbox with multiple paragraphs.
-    paragraphs = list of dicts:
-      {text, font_name, font_size, bold, italic, color, align, space_before}
-    """
+def add_multi_para_textbox(slide, left, top, width, height, paragraphs, word_wrap=True):
     txBox = slide.shapes.add_textbox(left, top, width, height)
     tf = txBox.text_frame
     tf.word_wrap = word_wrap
-    # Remove padding
     bodyPr = tf._txBody.find(qn('a:bodyPr'))
     if bodyPr is not None:
         bodyPr.set('lIns', '0'); bodyPr.set('rIns', '0')
@@ -280,7 +298,7 @@ def add_multi_para_textbox(slide, left, top, width, height, paragraphs,
             spcPts = etree.SubElement(spcBef, qn('a:spcPts'))
             spcPts.set('val', str(int(para['space_before'] * 100)))
         run = p.add_run()
-        run.text = para.get('text', '')
+        run.text = _clean_text(para.get('text', ''))
         run.font.name = para.get('font_name', 'Calibri')
         run.font.size = Pt(para.get('font_size', 14))
         run.font.bold = para.get('bold', False)
@@ -291,12 +309,8 @@ def add_multi_para_textbox(slide, left, top, width, height, paragraphs,
 
 def add_circle(slide, cx, cy, diameter, fill_color, text, text_color=C_WHITE,
                font_size=14, bold=True):
-    """Add a filled circle with centered text (for numbered badges)."""
     r = diameter / 2
-    shape = slide.shapes.add_shape(
-        9,  # OVAL
-        int(cx - r), int(cy - r), int(diameter), int(diameter)
-    )
+    shape = slide.shapes.add_shape(9, int(cx - r), int(cy - r), int(diameter), int(diameter))
     rgb_fill(shape, fill_color)
     shape.line.fill.background()
     tf = shape.text_frame
@@ -309,8 +323,6 @@ def add_circle(slide, cx, cy, diameter, fill_color, text, text_color=C_WHITE,
     run.font.size = Pt(font_size)
     run.font.bold = bold
     run.font.color.rgb = text_color
-    # Vertical center
-    from pptx.enum.text import MSO_ANCHOR
     tf.auto_size = None
     tf.word_wrap = False
     shape.text_frame.vertical_anchor = MSO_ANCHOR.MIDDLE
@@ -326,30 +338,24 @@ def slide_01_cover(prs, d):
     add_rect(slide, 0, 0, W, H, fill_color=C_DARK_BG)
     add_accent_bar(slide, dark=True)
 
-    # "REVENUE LEAK AUDIT" label — near top
     add_textbox(slide, LM, Inches(0.35), Inches(5), Inches(0.3),
                 "REVENUE LEAK AUDIT", "Arial", 11, bold=True, color=C_PURPLE)
 
-    # Client name — large, starts at roughly 1/4 down the slide
     add_textbox(slide, LM, Inches(1.3), W - LM - RM, Inches(2.1),
                 d["client_name"], "Georgia", 72, bold=True, color=C_WHITE)
 
-    # Subtitle — immediately below name
     add_textbox(slide, LM, Inches(3.45), Inches(9), Inches(0.38),
                 "AI Readiness Assessment & Revenue Recovery Analysis",
                 "Calibri", 18, color=C_MUTED)
 
-    # Red divider line
     add_rect(slide, LM, Inches(3.98), Inches(1.2), Inches(0.05), fill_color=C_RED)
 
-    # Prepared for / date block — clear gap below divider
     add_textbox(slide, LM, Inches(4.22), Inches(8), Inches(0.3),
-                f"Prepared for {d['prepared_for']} — {d['client_name']}",
+                f"Prepared for {d['prepared_for']} \u2014 {d['client_name']}",
                 "Calibri", 14, color=C_WHITE)
     add_textbox(slide, LM, Inches(4.56), Inches(4), Inches(0.3),
                 d["date"], "Calibri", 14, color=C_WHITE)
 
-    # CONFIDENTIAL — near bottom
     add_textbox(slide, LM, Inches(5.9), Inches(3), Inches(0.3),
                 "CONFIDENTIAL", "Arial", 11, bold=True, color=C_RED)
 
@@ -364,7 +370,7 @@ def slide_02_agenda(prs, d):
     add_accent_bar(slide, dark=False)
 
     add_section_label(slide, "TODAY'S AGENDA")
-    add_title(slide, "What we'll walk through together", top=Inches(0.72), font_size=40)
+    add_title(slide, "What we'll walk through together", top=TITLE_TOP, font_size=40)
 
     items = [
         ("01", "Your Industry",          d["agenda_01_desc"]),
@@ -372,27 +378,24 @@ def slide_02_agenda(prs, d):
         ("03", "Your AI Readiness Score","6 dimensions, scored with specific findings"),
         ("04", "The Revenue Leak",       "Exact dollars you're leaving on the table"),
         ("05", "Your AI Systems",        "The specific bots we recommend and how each works"),
-        ("06", "The Guarantee",          "Our 90-day ROI guarantee — risk-free"),
+        ("06", "The Guarantee",          "Our 90-day ROI guarantee \u2014 risk-free"),
         ("07", "Next Steps",             "Select your bots and we start building"),
     ]
 
     row_h = Inches(0.62)
-    row_top = Inches(1.95)
+    row_top = Inches(2.3)
     row_w = W - LM - RM
 
     for i, (num, title, desc) in enumerate(items):
         bg = C_HIGHLIGHT if i % 2 == 0 else C_WHITE
         add_rounded_rect(slide, LM, row_top + i * row_h, row_w, row_h - Inches(0.04),
                          fill_color=bg, radius_pt=4)
-        # Number
         add_textbox(slide, LM + Inches(0.12), row_top + i * row_h + Inches(0.12),
                     Inches(0.5), Inches(0.38),
                     num, "Georgia", 22, bold=True, color=C_PURPLE)
-        # Title
         add_textbox(slide, LM + Inches(0.65), row_top + i * row_h + Inches(0.14),
                     Inches(2.8), Inches(0.34),
                     title, "Calibri", 15, bold=True, color=C_DARK_TEXT)
-        # Description
         add_textbox(slide, LM + Inches(3.6), row_top + i * row_h + Inches(0.16),
                     Inches(8.5), Inches(0.3),
                     desc, "Calibri", 14, color=C_MUTED)
@@ -409,7 +412,6 @@ def slide_03_part_one(prs, d):
     add_rect(slide, 0, 0, W, H, fill_color=C_DARK_BG)
     add_accent_bar(slide, dark=True)
 
-    # Left purple bar
     add_rect(slide, 0, 0, Inches(0.08), H, fill_color=C_PURPLE)
 
     add_textbox(slide, LM, Inches(1.8), Inches(4), Inches(0.3),
@@ -432,14 +434,16 @@ def slide_04_journey(prs, d):
     add_accent_bar(slide, dark=False)
 
     add_section_label(slide, d["journey_label"])
-    add_title(slide, d["journey_title"], top=Inches(0.72), font_size=36)
+    # Auto-shrink so long journey titles don't wrap to 3 lines
+    add_title(slide, d["journey_title"], top=TITLE_TOP, font_size=32, auto_shrink=True)
 
     stages = d["journey_stages"]
     n = len(stages)
     total_w = W - LM - RM
     card_w = (total_w - Inches(0.1) * (n - 1)) / n
-    card_h = Inches(1.42)   # sized to content — no empty space inside
-    card_top = Inches(2.05)
+    card_h = Inches(1.42)
+    # Anchor cards OFF the reserved title block, not a hard-coded y.
+    card_top = CONTENT_TOP + Inches(0.1)  # ≈ 2.32"
 
     stage_colors = [
         RGBColor(0x5B, 0x8D, 0xE8), RGBColor(0x7B, 0x5E, 0xA7),
@@ -458,13 +462,11 @@ def slide_04_journey(prs, d):
                     card_w - Inches(0.16), Inches(0.28),
                     stage["name"], "Arial", 9, bold=True, color=color,
                     align=PP_ALIGN.CENTER)
-        # Description vertically centred in remaining card space
         add_vcenter_text(slide, cx + Inches(0.05), card_top + Inches(0.42),
                          card_w - Inches(0.1), card_h - Inches(0.42),
                          stage["desc"], "Calibri", 11,
                          color=RGBColor(0x55, 0x55, 0x55))
 
-        # Drop-off callout — immediately below card
         if stage.get("pct_lost"):
             add_textbox(slide, cx, card_top + card_h + Inches(0.1),
                         card_w, Inches(0.28),
@@ -475,7 +477,6 @@ def slide_04_journey(prs, d):
                         stage.get("reason", ""), "Calibri", 10,
                         color=C_MUTED, align=PP_ALIGN.CENTER)
 
-    # Closing line — anchored just below callouts
     add_textbox(slide, LM, card_top + card_h + Inches(0.78), W - LM - RM, Inches(0.35),
                 d["journey_closing"], "Calibri", 13, italic=True, color=C_RED)
 
@@ -493,13 +494,13 @@ def slide_05_stats(prs, d):
 
     add_section_label(slide, d["stat_section_label"])
     add_title(slide, "What the data says about businesses like yours",
-              top=Inches(0.72), font_size=36)
+              top=TITLE_TOP, font_size=32, auto_shrink=True)
 
     stats = d["industry_stats"]
     card_w = Inches(5.8)
-    card_h = Inches(1.9)   # taller so number doesn't crowd label
+    card_h = Inches(1.95)
     gap = Inches(0.25)
-    top_row_y = Inches(2.1)
+    top_row_y = CONTENT_TOP + Inches(0.1)   # anchored off reserved title block
     bot_row_y = top_row_y + card_h + Inches(0.2)
     positions = [
         (LM, top_row_y),
@@ -512,15 +513,12 @@ def slide_05_stats(prs, d):
         add_rounded_rect(slide, cx, cy, card_w, card_h,
                          fill_color=C_CARD_BG, radius_pt=4,
                          line_color=RGBColor(0xE0, 0xE0, 0xE0))
-        # Big number — more vertical room
-        add_textbox(slide, cx + Inches(0.18), cy + Inches(0.12),
-                    card_w - Inches(0.36), Inches(0.82),
-                    stat["number"], "Georgia", 48, bold=True, color=C_DARK_TEXT)
-        # Label — pushed down so it doesn't overlap number
-        add_textbox(slide, cx + Inches(0.18), cy + Inches(0.9),
-                    card_w - Inches(0.36), Inches(0.68),
+        add_textbox(slide, cx + Inches(0.18), cy + Inches(0.1),
+                    card_w - Inches(0.36), Inches(0.78),
+                    stat["number"], "Georgia", 44, bold=True, color=C_DARK_TEXT)
+        add_textbox(slide, cx + Inches(0.18), cy + Inches(0.92),
+                    card_w - Inches(0.36), Inches(0.62),
                     stat["label"], "Calibri", 12, color=C_DARK_TEXT)
-        # Source
         add_textbox(slide, cx + Inches(0.18), cy + Inches(1.58),
                     card_w - Inches(0.36), Inches(0.26),
                     stat["source"], "Calibri", 10, italic=True, color=C_MUTED)
@@ -538,36 +536,35 @@ def slide_06_lifecycle(prs, d):
     add_accent_bar(slide, dark=False)
 
     add_section_label(slide, "THE LEAD LIFECYCLE")
-    add_title(slide, d["lifecycle_title"], top=Inches(0.72), font_size=32)
+    # Shrink title so it sits in one line when possible and leaves room for intro
+    add_title(slide, d["lifecycle_title"], top=TITLE_TOP, font_size=28, auto_shrink=True)
 
-    # Intro paragraph — more gap below title
-    add_textbox(slide, LM, Inches(1.88), W - LM - RM, Inches(0.5),
+    # Intro paragraph — anchored to reserved title block, not a hard-coded y
+    intro_top = CONTENT_TOP
+    add_textbox(slide, LM, intro_top, W - LM - RM, Inches(0.5),
                 d["lifecycle_intro"], "Calibri", 13, color=C_DARK_TEXT)
 
     stages = d["lifecycle_stages"]
     n = 6
     total_w = W - LM - RM
     card_w = (total_w - Inches(0.08) * (n - 1)) / n
-    card_h = Inches(1.95)   # height matches content: label + desc + badge
-    card_top = Inches(2.55)
+    card_h = Inches(1.95)
+    card_top = intro_top + Inches(0.7)
 
     for i, stage in enumerate(stages):
         cx = LM + i * (card_w + Inches(0.08))
         add_rounded_rect(slide, cx, card_top, card_w, card_h,
                          fill_color=C_CARD_BG, radius_pt=4,
                          line_color=RGBColor(0xDD, 0xDD, 0xDD))
-        # Stage name
         add_textbox(slide, cx + Inches(0.06), card_top + Inches(0.1),
                     card_w - Inches(0.12), Inches(0.32),
                     stage["name"], "Arial", 9, bold=True, color=C_PURPLE,
                     align=PP_ALIGN.CENTER)
-        # Description vertically centred between name and badge
         add_vcenter_text(slide, cx + Inches(0.05), card_top + Inches(0.44),
                          card_w - Inches(0.1), card_h - Inches(0.44) - Inches(0.44),
                          stage["desc"], "Calibri", 10,
                          color=RGBColor(0x55, 0x55, 0x55))
 
-        # Status badge pinned to bottom
         status = stage["status"].upper()
         badge_color = C_GREEN_BADGE if status == "WORKING" else (
             C_AMBER_BADGE if status == "MANUAL" else C_RED_BADGE)
@@ -578,10 +575,8 @@ def slide_06_lifecycle(prs, d):
                                   fill_color=badge_color, radius_pt=4)
         set_shape_text(badge, status, "Arial", 9, bold=True,
                        color=C_WHITE, align=PP_ALIGN.CENTER)
-        badge.text_frame.vertical_anchor = __import__(
-            'pptx.enum.text', fromlist=['MSO_ANCHOR']).MSO_ANCHOR.MIDDLE
+        badge.text_frame.vertical_anchor = MSO_ANCHOR.MIDDLE
 
-    # Summary line — anchored just below cards
     add_textbox(slide, LM, card_top + card_h + Inches(0.18), W - LM - RM, Inches(0.45),
                 d["lifecycle_summary"], "Calibri", 13, italic=True, color=C_RED)
 
@@ -599,10 +594,10 @@ def slide_07_funnel(prs, d):
 
     add_section_label(slide, "YOUR REVENUE FUNNEL")
     add_title(slide, "Where your monthly leads actually end up",
-              top=Inches(0.72), font_size=36)
+              top=TITLE_TOP, font_size=32, auto_shrink=True)
 
-    funnel = d["funnel_rows"]  # list of 5: {label, value, lost}   last row has no lost
-    bar_top = Inches(1.95)
+    funnel = d["funnel_rows"]
+    bar_top = CONTENT_TOP
     bar_h = Inches(0.56)
     bar_gap = Inches(0.06)
     max_w = W - LM - RM - Inches(1.8)
@@ -612,26 +607,23 @@ def slide_07_funnel(prs, d):
     for i, (row, w_frac) in enumerate(zip(funnel, widths)):
         bar_w = max_w * w_frac
         y = bar_top + i * (bar_h + bar_gap)
-        # Funnel bar
-        bar = add_rounded_rect(slide, LM, y, bar_w, bar_h,
-                                fill_color=C_FUNNEL_BAR, radius_pt=3)
-        # Label inside bar
+        add_rounded_rect(slide, LM, y, bar_w, bar_h,
+                         fill_color=C_FUNNEL_BAR, radius_pt=3)
         add_textbox(slide, LM + Inches(0.15), y + Inches(0.1),
-                    bar_w - Inches(0.3), Inches(0.36),
+                    bar_w - Inches(1.4), Inches(0.36),
                     row["label"], "Calibri", 13, color=C_WHITE)
-        # Value at right end of bar
         add_textbox(slide, LM + bar_w - Inches(1.2), y + Inches(0.05),
                     Inches(1.1), Inches(0.46),
                     str(row["value"]), "Georgia", 26, bold=True,
                     color=C_WHITE, align=PP_ALIGN.RIGHT)
-        # Lost text to right of bar
         if row.get("lost"):
             add_textbox(slide, LM + bar_w + Inches(0.15), y + Inches(0.1),
-                        Inches(1.3), Inches(0.36),
+                        Inches(1.5), Inches(0.36),
                         row["lost"], "Calibri", 13, bold=True, color=C_RED)
 
-    # Insight paragraph
-    add_textbox(slide, LM, Inches(5.3), W - LM - RM, Inches(0.7),
+    # Insight paragraph — anchored AFTER the last bar so it can't collide
+    insight_top = bar_top + 5 * (bar_h + bar_gap) + Inches(0.2)
+    add_textbox(slide, LM, insight_top, W - LM - RM, Inches(0.8),
                 d["funnel_insight"], "Calibri", 13, italic=True, color=C_DARK_TEXT)
 
     add_footer(slide, d["brand_name"], 7)
@@ -666,15 +658,15 @@ def slide_09_numbers(prs, d):
     add_accent_bar(slide, dark=False)
 
     add_section_label(slide, "YOUR NUMBERS")
-    add_title(slide, f"{d['client_name']} — current state",
-              top=Inches(0.72), font_size=36)
+    add_title(slide, f"{d['client_name']} \u2014 current state",
+              top=TITLE_TOP, font_size=32, auto_shrink=True)
 
     cards = d["number_cards"]
     card_w = Inches(3.8)
-    card_h = Inches(2.1)   # taller — fills more slide height
+    card_h = Inches(2.1)
     gap_x = Inches(0.28)
     gap_y = Inches(0.28)
-    top_y = Inches(1.88)
+    top_y = CONTENT_TOP
 
     positions = [
         (LM,                        top_y),
@@ -689,15 +681,15 @@ def slide_09_numbers(prs, d):
         add_rounded_rect(slide, cx, cy, card_w, card_h,
                          fill_color=C_CARD_BG, radius_pt=4,
                          line_color=RGBColor(0xE0, 0xE0, 0xE0))
-        # Big value
+        # Auto-shrink big value for long strings like "$12,000"
+        value_str = str(card["value"])
+        value_size = 44 if len(value_str) <= 6 else (36 if len(value_str) <= 8 else 30)
         add_textbox(slide, cx + Inches(0.18), cy + Inches(0.14),
                     card_w - Inches(0.36), Inches(0.9),
-                    str(card["value"]), "Georgia", 44, bold=True, color=C_DARK_TEXT)
-        # Label
+                    value_str, "Georgia", value_size, bold=True, color=C_DARK_TEXT)
         add_textbox(slide, cx + Inches(0.18), cy + Inches(1.0),
                     card_w - Inches(0.36), Inches(0.55),
                     card["label"], "Calibri", 14, color=C_DARK_TEXT)
-        # Sub-note
         add_textbox(slide, cx + Inches(0.18), cy + Inches(1.58),
                     card_w - Inches(0.36), Inches(0.38),
                     card["subnote"], "Calibri", 11, italic=True, color=C_MUTED)
@@ -715,21 +707,19 @@ def slide_10_methodology(prs, d):
     add_accent_bar(slide, dark=False)
 
     add_section_label(slide, "AUDIT METHODOLOGY")
-    add_title(slide, "What we actually tested", top=Inches(0.72), font_size=36)
+    add_title(slide, "What we actually tested", top=TITLE_TOP, font_size=32, auto_shrink=True)
 
-    # Intro italic line
-    add_textbox(slide, LM, Inches(1.72), W - LM - RM, Inches(0.35),
-                f"We didn't just ask questions — we tested your {d['term_business']} "
+    add_textbox(slide, LM, CONTENT_TOP, W - LM - RM, Inches(0.35),
+                f"We didn't just ask questions \u2014 we tested your {d['term_business']} "
                 f"as a real {d['term_client']} would.",
                 "Calibri", 13, italic=True, color=C_DARK_TEXT)
 
-    tests = d["audit_tests"]  # list of 6: {name, finding}
-    # 2-column, 3-row grid
+    tests = d["audit_tests"]
     col_w = Inches(5.9)
     row_h = Inches(1.3)
     gap_x = Inches(0.26)
     gap_y = Inches(0.1)
-    start_y = Inches(2.18)
+    start_y = CONTENT_TOP + Inches(0.45)
 
     for i, test in enumerate(tests):
         col = i % 2
@@ -741,17 +731,13 @@ def slide_10_methodology(prs, d):
                          fill_color=C_CARD_BG, radius_pt=4,
                          line_color=RGBColor(0xE0, 0xE0, 0xE0))
 
-        # Number circle
-        add_circle(slide,
-                   cx + Inches(0.35), cy + row_h / 2,
+        add_circle(slide, cx + Inches(0.35), cy + row_h / 2,
                    Inches(0.42), C_PURPLE,
                    str(i + 1), font_size=16)
 
-        # Test name
         add_textbox(slide, cx + Inches(0.7), cy + Inches(0.1),
                     col_w - Inches(0.85), Inches(0.38),
                     test["name"], "Calibri", 14, bold=True, color=C_DARK_TEXT)
-        # Finding
         add_textbox(slide, cx + Inches(0.7), cy + Inches(0.5),
                     col_w - Inches(0.85), Inches(0.65),
                     test["finding"], "Calibri", 12, color=C_MUTED)
@@ -771,10 +757,10 @@ def slide_11_score(prs, d):
     add_textbox(slide, LM, Inches(0.3), Inches(8), Inches(0.3),
                 "YOUR AI READINESS SCORE", "Arial", 11, bold=True, color=C_PURPLE)
 
-    dims = d["dimensions"]  # list of 6: {name, weight, score}
+    dims = d["dimensions"]
     bar_top = Inches(0.78)
-    bar_h = Inches(0.52)
-    bar_gap = Inches(0.1)
+    bar_h = Inches(0.48)
+    bar_gap = Inches(0.08)
     bar_track_w = Inches(4.5)
     label_w = Inches(2.4)
 
@@ -782,66 +768,88 @@ def slide_11_score(prs, d):
         y = bar_top + i * (bar_h + bar_gap)
         score_frac = dim["score"] / 100.0
 
-        # Dimension name
-        add_textbox(slide, LM, y + Inches(0.08), label_w, Inches(0.36),
-                    dim["name"], "Calibri", 14, color=C_WHITE)
-        # Weight
-        add_textbox(slide, LM + label_w, y + Inches(0.1), Inches(0.6), Inches(0.3),
+        add_textbox(slide, LM, y + Inches(0.06), label_w, Inches(0.36),
+                    dim["name"], "Calibri", 13, color=C_WHITE)
+        add_textbox(slide, LM + label_w, y + Inches(0.08), Inches(0.6), Inches(0.3),
                     dim["weight"], "Calibri", 11, color=C_MUTED)
 
-        # Track (background bar)
         track_x = LM + label_w + Inches(0.7)
-        add_rect(slide, track_x, y + Inches(0.14),
+        add_rect(slide, track_x, y + Inches(0.12),
                  bar_track_w, Inches(0.24),
                  fill_color=RGBColor(0x3A, 0x38, 0x5A))
 
-        # Fill bar
         score = dim["score"]
         fill_color = C_RED if score < 30 else (C_AMBER if score < 60 else C_GREEN)
         fill_w = max(Inches(0.15), bar_track_w * score_frac)
-        add_rect(slide, track_x, y + Inches(0.14),
+        add_rect(slide, track_x, y + Inches(0.12),
                  fill_w, Inches(0.24), fill_color=fill_color)
 
-        # Score number
-        add_textbox(slide, track_x + bar_track_w + Inches(0.1), y + Inches(0.06),
+        add_textbox(slide, track_x + bar_track_w + Inches(0.1), y + Inches(0.04),
                     Inches(0.5), Inches(0.36),
                     str(score), "Calibri", 16, bold=True, color=fill_color)
 
-    # KEY FINDINGS label — extra gap from bars
-    kf_y = bar_top + 6 * (bar_h + bar_gap) + Inches(0.18)
+    # KEY FINDINGS — tighter spacing AND room-aware truncation so the block
+    # fits comfortably above the footer no matter how many findings are passed.
+    kf_y = bar_top + 6 * (bar_h + bar_gap) + Inches(0.15)
     add_textbox(slide, LM, kf_y, Inches(5), Inches(0.28),
                 "KEY FINDINGS", "Arial", 10, bold=True, color=C_PURPLE)
 
-    findings = d["key_findings"]  # list of 5 strings
+    findings = d.get("key_findings", [])
+    # Available height between kf_y + 0.34" (first line) and footer at H - 0.45"
+    footer_safe = H - Inches(0.5)
+    available_h = footer_safe - (kf_y + Inches(0.34))
+    # Allow ~0.32" per finding (single line) — cap list length to what fits.
+    line_h = Inches(0.32)
+    max_findings = int(available_h / line_h)
+    findings = findings[:max_findings]
+    # Compact width so each finding stays on ONE line (prevents overflow).
     for i, finding in enumerate(findings):
-        add_textbox(slide, LM, kf_y + Inches(0.34) + i * Inches(0.42),
-                    Inches(7.8), Inches(0.36),
-                    "→  " + finding, "Calibri", 12, color=C_WHITE)
+        # Trim text that would wrap — keep it readable
+        compact = _shorten_for_single_line(finding, max_chars=110)
+        add_textbox(slide, LM, kf_y + Inches(0.34) + i * line_h,
+                    Inches(7.9), line_h,
+                    "\u2192  " + compact, "Calibri", 11, color=C_WHITE)
 
-    # Score circle (right side)
+    # Score circle (right side) — moved up and made slightly smaller so the
+    # /100 label and status badge below it never overlap the circle.
     circle_cx = Inches(10.8)
-    circle_cy = Inches(2.8)
-    circle_d = Inches(2.8)
+    circle_cy = Inches(2.4)
+    circle_d = Inches(2.4)
     add_circle(slide, circle_cx, circle_cy, circle_d,
                C_SCORE_RED, str(d["overall_score"]),
-               font_size=72)
+               font_size=64)
 
-    # /100 label
-    add_textbox(slide, circle_cx - Inches(1.4), circle_cy + Inches(0.85),
+    # /100 — sits well below the circle (circle bottom is at cy + r = 3.6")
+    add_textbox(slide, circle_cx - Inches(1.4), Inches(3.75),
                 Inches(2.8), Inches(0.4),
                 "/100", "Calibri", 22, color=C_WHITE, align=PP_ALIGN.CENTER)
 
-    # Status badge
-    add_textbox(slide, circle_cx - Inches(1.6), circle_cy + Inches(1.35),
-                Inches(3.2), Inches(0.5),
+    # Status badge — further down, in its own y-band with no chance of
+    # overlapping the circle even for 2-line labels.
+    add_textbox(slide, circle_cx - Inches(1.9), Inches(4.3),
+                Inches(3.8), Inches(0.8),
                 d["score_status_label"], "Arial", 13, bold=True,
                 color=C_RED, align=PP_ALIGN.CENTER)
 
     add_footer(slide, d["brand_name"], 11)
 
 
+def _shorten_for_single_line(text, max_chars=110):
+    text = _clean_text(text).replace("\n", " ")
+    # collapse whitespace
+    text = " ".join(text.split())
+    if len(text) <= max_chars:
+        return text
+    # Cut at last space before limit, add ellipsis
+    cut = text[:max_chars]
+    last_space = cut.rfind(" ")
+    if last_space > 60:
+        cut = cut[:last_space]
+    return cut.rstrip(",.;:\u2014- ") + "\u2026"
+
+
 # ─────────────────────────────────────────────
-# SLIDES 12–14 — DIMENSION DEEP DIVE (reusable)
+# DIMENSION DEEP DIVE
 # ─────────────────────────────────────────────
 
 def slide_deep_dive(prs, d, dive, slide_number):
@@ -849,10 +857,8 @@ def slide_deep_dive(prs, d, dive, slide_number):
     add_rect(slide, 0, 0, W, H, fill_color=C_LIGHT_BG)
     add_accent_bar(slide, dark=False)
 
-    # Section label
-    add_section_label(slide, f"DIMENSION DEEP DIVE — {dive['score']}/100")
+    add_section_label(slide, f"DIMENSION DEEP DIVE \u2014 {dive['score']}/100")
 
-    # Score badge (top right)
     badge = add_rounded_rect(slide, W - RM - Inches(2.6), Inches(0.3),
                               Inches(2.6), Inches(1.1),
                               fill_color=C_SCORE_RED, radius_pt=4)
@@ -865,12 +871,10 @@ def slide_deep_dive(prs, d, dive, slide_number):
                 dive["subtitle"], "Calibri", 11,
                 color=C_WHITE, align=PP_ALIGN.CENTER)
 
-    # Dimension title
-    add_title(slide, dive["name"], top=Inches(0.72), font_size=36,
-              width=W - LM - RM - Inches(3.0))
+    add_title(slide, dive["name"], top=TITLE_TOP, font_size=32,
+              width=W - LM - RM - Inches(3.0), auto_shrink=True)
 
-    # 4 sub-score cards in 2×2 grid
-    subs = dive["sub_scores"]  # list of 4: {score, label, note}
+    subs = dive["sub_scores"]
     sub_card_w = Inches(5.7)
     sub_card_h = Inches(0.72)
     sub_gap_x = Inches(0.28)
@@ -887,25 +891,20 @@ def slide_deep_dive(prs, d, dive, slide_number):
                          fill_color=C_CARD_BG, radius_pt=4,
                          line_color=RGBColor(0xE0, 0xE0, 0xE0))
 
-        # Score number
         add_textbox(slide, cx + Inches(0.12), cy + Inches(0.05),
                     Inches(0.6), Inches(0.62),
                     str(sub["score"]), "Georgia", 28, bold=True, color=C_PURPLE)
-        # Label
         add_textbox(slide, cx + Inches(0.75), cy + Inches(0.06),
                     sub_card_w - Inches(0.9), Inches(0.3),
                     sub["label"], "Calibri", 13, bold=True, color=C_DARK_TEXT)
-        # Note
         add_textbox(slide, cx + Inches(0.75), cy + Inches(0.36),
                     sub_card_w - Inches(0.9), Inches(0.28),
                     sub["note"], "Calibri", 11, color=C_MUTED)
 
-    # AUDIT FINDING block
     af_top = Inches(3.42)
     af_h = Inches(1.3)
     add_rect(slide, LM, af_top, W - LM - RM, af_h,
              fill_color=RGBColor(0xFF, 0xF0, 0xF0))
-    # Red left border
     add_rect(slide, LM, af_top, Inches(0.05), af_h, fill_color=C_RED)
     add_textbox(slide, LM + Inches(0.15), af_top + Inches(0.08),
                 Inches(3), Inches(0.28),
@@ -914,7 +913,6 @@ def slide_deep_dive(prs, d, dive, slide_number):
                 W - LM - RM - Inches(0.3), Inches(0.85),
                 dive["audit_finding"], "Calibri", 12, color=C_DARK_TEXT)
 
-    # REVENUE IMPACT block
     ri_top = af_top + af_h + Inches(0.12)
     add_rect(slide, LM, ri_top, W - LM - RM, Inches(1.0),
              fill_color=RGBColor(0xF0, 0xFF, 0xF6))
@@ -954,7 +952,7 @@ def slide_15_bottom_line(prs, d):
     add_textbox(slide, LM, Inches(4.05), W - LM - RM, Inches(0.75),
                 d["bottom_line_context"], "Calibri", 15, color=C_MUTED)
 
-    add_textbox(slide, LM, Inches(5.05), W - LM - RM, Inches(0.75),
+    add_textbox(slide, LM, Inches(5.05), W - LM - RM, Inches(1.0),
                 d["closing_line"], "Georgia", 19, italic=True, color=C_WHITE)
 
 
@@ -989,7 +987,7 @@ def slide_17_how_it_works(prs, d):
 
     add_section_label(slide, "HOW IT WORKS")
     add_title(slide, f"What changes in your {d['term_client']} journey",
-              top=Inches(0.72), font_size=36)
+              top=TITLE_TOP, font_size=32, auto_shrink=True)
 
     before_steps = [
         "Lead calls in",
@@ -1001,12 +999,11 @@ def slide_17_how_it_works(prs, d):
     ]
 
     col_w = (W - LM - RM) / 6 - Inches(0.07)
-    step_h = Inches(1.3)   # significantly taller
+    step_h = Inches(1.3)
 
-    # BEFORE label
-    add_textbox(slide, LM, Inches(1.88), Inches(6), Inches(0.3),
+    add_textbox(slide, LM, CONTENT_TOP - Inches(0.05), Inches(6), Inches(0.3),
                 "BEFORE (current)", "Arial", 11, bold=True, color=C_RED)
-    step_top_before = Inches(2.25)
+    step_top_before = CONTENT_TOP + Inches(0.3)
 
     for i, step in enumerate(before_steps):
         cx = LM + i * (col_w + Inches(0.07))
@@ -1018,12 +1015,12 @@ def slide_17_how_it_works(prs, d):
         if i < 5:
             add_textbox(slide, cx + col_w, step_top_before + Inches(0.48),
                         Inches(0.07), Inches(0.3),
-                        "—", "Calibri", 11, color=C_MUTED, align=PP_ALIGN.CENTER)
+                        "\u2014", "Calibri", 11, color=C_MUTED, align=PP_ALIGN.CENTER)
 
-    # AFTER label
-    add_textbox(slide, LM, Inches(3.75), Inches(6), Inches(0.3),
+    after_label_top = step_top_before + step_h + Inches(0.22)
+    add_textbox(slide, LM, after_label_top, Inches(6), Inches(0.3),
                 "AFTER (with AI systems)", "Arial", 11, bold=True, color=C_GREEN)
-    step_top_after = Inches(4.12)
+    step_top_after = after_label_top + Inches(0.35)
 
     after_steps = [
         "Lead calls in",
@@ -1044,17 +1041,16 @@ def slide_17_how_it_works(prs, d):
         if i < 5:
             add_textbox(slide, cx + col_w, step_top_after + Inches(0.48),
                         Inches(0.07), Inches(0.3),
-                        "—", "Calibri", 11, color=C_MUTED, align=PP_ALIGN.CENTER)
+                        "\u2014", "Calibri", 11, color=C_MUTED, align=PP_ALIGN.CENTER)
 
-    # Closing line
-    add_textbox(slide, LM, Inches(5.65), W - LM - RM, Inches(0.45),
+    add_textbox(slide, LM, step_top_after + step_h + Inches(0.15), W - LM - RM, Inches(0.45),
                 d["how_it_works_closing"], "Calibri", 13, italic=True, color=C_GREEN)
 
     add_footer(slide, d["brand_name"], 17)
 
 
 # ─────────────────────────────────────────────
-# SYSTEM SLIDES (18+, one per system)
+# SYSTEM SLIDES
 # ─────────────────────────────────────────────
 
 def slide_system(prs, d, sys_data, idx, total, slide_number):
@@ -1062,53 +1058,46 @@ def slide_system(prs, d, sys_data, idx, total, slide_number):
     add_rect(slide, 0, 0, W, H, fill_color=C_LIGHT_BG)
     add_accent_bar(slide, dark=False)
 
-    # Section label
     add_textbox(slide, LM, Inches(0.18), Inches(5), Inches(0.3),
                 f"SYSTEM {idx} OF {total}", "Arial", 11, bold=True, color=C_PURPLE)
 
-    # System name — font size auto-scales with name length
     name_len = len(sys_data["name"])
     title_size = 34 if name_len <= 20 else (28 if name_len <= 30 else 22)
     add_title(slide, sys_data["name"], top=Inches(0.55), font_size=title_size,
-              width=Inches(7.6))
+              width=Inches(7.6), height=Inches(0.65))
 
-    # Phase badge
     badge = add_rounded_rect(slide, LM, Inches(1.28), Inches(2.6), Inches(0.36),
                               fill_color=C_DARK_TEXT, radius_pt=4)
     set_shape_text(badge, sys_data["label"], "Arial", 10, bold=True,
                    color=C_WHITE, align=PP_ALIGN.CENTER)
-    badge.text_frame.vertical_anchor = __import__(
-        'pptx.enum.text', fromlist=['MSO_ANCHOR']).MSO_ANCHOR.MIDDLE
+    badge.text_frame.vertical_anchor = MSO_ANCHOR.MIDDLE
 
-    # Description
     add_textbox(slide, LM, Inches(1.78), Inches(7.5), Inches(0.95),
                 sys_data["description"], "Calibri", 13, color=C_DARK_TEXT)
 
-    # HOW IT WORKS label
     add_textbox(slide, LM, Inches(2.82), Inches(4), Inches(0.25),
                 "HOW IT WORKS", "Arial", 10, bold=True, color=C_PURPLE)
 
-    # 5 step cards
-    steps = sys_data["steps"]  # list of 5 strings
+    steps = sys_data["steps"]
     step_w = (Inches(7.5) - Inches(0.08) * 4) / 5
-    step_h = Inches(1.1)
+    # Made step cards taller so 3-line step text fits without overflow.
+    step_h = Inches(1.3)
     step_top = Inches(3.12)
 
     for i, step in enumerate(steps):
         cx = LM + i * (step_w + Inches(0.08))
         add_rounded_rect(slide, cx, step_top, step_w, step_h,
                          fill_color=C_HIGHLIGHT, radius_pt=4)
-        # Number circle
-        add_circle(slide, cx + step_w / 2, step_top + Inches(0.28),
-                   Inches(0.38), C_PURPLE, str(i + 1), font_size=13)
-        # Step text vertically centred in bottom half of card
-        add_vcenter_text(slide, cx + Inches(0.06), step_top + Inches(0.52),
-                         step_w - Inches(0.12), Inches(0.52),
-                         step, "Calibri", 10, color=C_DARK_TEXT)
+        add_circle(slide, cx + step_w / 2, step_top + Inches(0.25),
+                   Inches(0.34), C_PURPLE, str(i + 1), font_size=12)
+        # Step text occupies the BOTTOM ~0.8" of the card, below the circle
+        add_vcenter_text(slide, cx + Inches(0.06), step_top + Inches(0.48),
+                         step_w - Inches(0.12), step_h - Inches(0.54),
+                         step, "Calibri", 9, color=C_DARK_TEXT)
 
-    # AUDIT FINDING block
-    af_top = Inches(4.38)
-    af_h = Inches(1.08)
+    # AUDIT FINDING — shifted down so it doesn't collide with tall step cards
+    af_top = step_top + step_h + Inches(0.15)   # ≈ 4.57"
+    af_h = Inches(1.0)
     add_rect(slide, LM, af_top, Inches(7.5), af_h,
              fill_color=RGBColor(0xFF, 0xF0, 0xF0))
     add_rect(slide, LM, af_top, Inches(0.05), af_h, fill_color=C_RED)
@@ -1116,22 +1105,25 @@ def slide_system(prs, d, sys_data, idx, total, slide_number):
                 Inches(3), Inches(0.25),
                 "AUDIT FINDING", "Arial", 10, bold=True, color=C_RED)
     add_textbox(slide, LM + Inches(0.15), af_top + Inches(0.32),
-                Inches(7.2), Inches(0.7),
-                sys_data["audit_finding"], "Calibri", 12, color=C_DARK_TEXT)
+                Inches(7.2), Inches(0.65),
+                sys_data["audit_finding"], "Calibri", 11, color=C_DARK_TEXT)
 
-    # ROI callout — sits immediately below audit finding
     roi_top = af_top + af_h + Inches(0.1)
-    add_rounded_rect(slide, LM, roi_top, Inches(7.5), Inches(0.68),
+    add_rounded_rect(slide, LM, roi_top, Inches(7.5), Inches(0.58),
                      fill_color=C_DARK_TEXT, radius_pt=4)
-    add_textbox(slide, LM + Inches(0.2), roi_top + Inches(0.1),
+    add_textbox(slide, LM + Inches(0.2), roi_top + Inches(0.18),
                 Inches(4.5), Inches(0.28),
                 "PROJECTED ROI", "Arial", 10, bold=True, color=C_MUTED)
-    add_textbox(slide, LM + Inches(4.0), roi_top + Inches(0.06),
-                Inches(3.3), Inches(0.48),
+    add_textbox(slide, LM + Inches(4.0), roi_top + Inches(0.12),
+                Inches(3.3), Inches(0.38),
                 f"{sys_data['roi']} return on investment",
-                "Calibri", 18, bold=True, color=C_GREEN, align=PP_ALIGN.RIGHT)
+                "Calibri", 16, bold=True, color=C_GREEN, align=PP_ALIGN.RIGHT)
 
-    # RIGHT COLUMN — 5 equal cards, top to bottom, uniform spacing
+    # RIGHT COLUMN — 5 equal cards.
+    # Key fix: label is at the TOP of the card with a reserved height, and
+    # the value lives BELOW it in its own region. Previously labels sat at
+    # 0.1" and the value at 0.38" within a 0.7" card, which caused the big
+    # number to spill past the card top for the first card.
     rc_x = Inches(8.35)
     rc_w = W - rc_x - RM
     rc_top = Inches(0.18)
@@ -1141,11 +1133,11 @@ def slide_system(prs, d, sys_data, idx, total, slide_number):
     card_h = (rc_bottom - rc_top - gap * (n_cards - 1)) / n_cards
 
     cards_rc = [
-        (sys_data["metric_label"],  str(sys_data["metric_value"]), C_DARK_TEXT, 40, C_CARD_BG),
-        ("Monthly Revenue",          sys_data["monthly_revenue"],   C_GREEN,     28, C_CARD_BG),
-        ("Monthly Cost",             sys_data["monthly_cost"],       C_AMBER,     28, C_CARD_BG),
-        ("Setup Fee",                sys_data["setup_fee"],          C_DARK_TEXT, 28, C_CARD_BG),
-        ("ROI",                      sys_data["roi"],                C_GREEN,     28, C_DARK_TEXT),
+        (sys_data["metric_label"],  str(sys_data["metric_value"]), C_DARK_TEXT, 32, C_CARD_BG),
+        ("Monthly Revenue",          sys_data["monthly_revenue"],   C_GREEN,     26, C_CARD_BG),
+        ("Monthly Cost",             sys_data["monthly_cost"],       C_AMBER,     26, C_CARD_BG),
+        ("Setup Fee",                sys_data["setup_fee"],          C_DARK_TEXT, 26, C_CARD_BG),
+        ("ROI",                      sys_data["roi"],                C_GREEN,     26, C_DARK_TEXT),
     ]
 
     for i, (label, value, val_color, val_size, bg) in enumerate(cards_rc):
@@ -1154,18 +1146,26 @@ def slide_system(prs, d, sys_data, idx, total, slide_number):
                          fill_color=bg, radius_pt=4,
                          line_color=None if bg == C_DARK_TEXT else RGBColor(0xE0, 0xE0, 0xE0))
         label_color = C_MUTED if bg == C_CARD_BG else RGBColor(0x99, 0x99, 0xBB)
-        add_textbox(slide, rc_x + Inches(0.12), cy + Inches(0.1),
-                    rc_w - Inches(0.24), Inches(0.28),
+
+        # Reserve a fixed label zone at the top of each card, then the value
+        # box starts well below it. This prevents any label/value collision.
+        label_h = Inches(0.5)   # room for 2 lines at 10pt
+        add_textbox(slide, rc_x + Inches(0.12), cy + Inches(0.08),
+                    rc_w - Inches(0.24), label_h,
                     label, "Calibri", 10, color=label_color)
-        add_textbox(slide, rc_x + Inches(0.12), cy + Inches(0.38),
-                    rc_w - Inches(0.24), card_h - Inches(0.48),
+        value_box_top = cy + Inches(0.08) + label_h + Inches(0.02)
+        value_box_h = card_h - (value_box_top - cy) - Inches(0.1)
+        if value_box_h < Inches(0.3):
+            value_box_h = Inches(0.3)
+        add_textbox(slide, rc_x + Inches(0.12), value_box_top,
+                    rc_w - Inches(0.24), value_box_h,
                     value, "Georgia", val_size, bold=True, color=val_color)
 
     add_footer(slide, d["brand_name"], slide_number)
 
 
 # ─────────────────────────────────────────────
-# REVENUE SUMMARY SLIDE
+# REVENUE SUMMARY
 # ─────────────────────────────────────────────
 
 def slide_revenue_summary(prs, d, slide_number):
@@ -1176,23 +1176,24 @@ def slide_revenue_summary(prs, d, slide_number):
     add_textbox(slide, LM, Inches(0.3), Inches(8), Inches(0.28),
                 "REVENUE RECOVERY SUMMARY", "Arial", 11, bold=True, color=C_PURPLE)
 
-    # Big number
     add_textbox(slide, LM, Inches(0.65), Inches(8), Inches(1.5),
                 d["total_monthly_revenue"], "Georgia", 80, bold=True, color=C_GREEN)
     add_textbox(slide, LM, Inches(2.1), Inches(8), Inches(0.4),
-                f"additional revenue per month  ·  {d['annual_recovery']} per year",
+                f"additional revenue per month  \u00b7  {d['annual_recovery']} per year",
                 "Calibri", 16, color=C_MUTED)
 
-    # 4 KPI boxes
+    # 4 KPI boxes — widened + auto-shrinking values so long strings fit.
     kpis = [
         ("Monthly Investment", d["total_monthly_cost"],     C_WHITE),
         ("Net Monthly Gain",   d["net_monthly_gain"],       C_GREEN),
         ("Annual Recovery",    d["annual_recovery"],        C_GREEN),
         ("Overall ROI",        d["overall_roi"] + " return", C_PURPLE),
     ]
-    kpi_w = Inches(3.0)
-    kpi_h = Inches(1.0)
+    # Use full content width for the row
+    kpi_row_w = W - LM - RM
     kpi_gap = Inches(0.14)
+    kpi_w = (kpi_row_w - kpi_gap * 3) / 4
+    kpi_h = Inches(1.0)
     kpi_top = Inches(2.62)
 
     for i, (label, value, color) in enumerate(kpis):
@@ -1202,28 +1203,33 @@ def slide_revenue_summary(prs, d, slide_number):
         add_textbox(slide, cx + Inches(0.12), kpi_top + Inches(0.06),
                     kpi_w - Inches(0.24), Inches(0.28),
                     label, "Calibri", 10, color=C_MUTED)
+        # Shrink value aggressively so long strings ("$97,200", "4.4x return")
+        # fit inside a ~2.9" KPI card without clipping.
+        vlen = len(value)
+        if vlen <= 6:
+            v_size = 26
+        elif vlen <= 8:
+            v_size = 22
+        else:
+            v_size = 20
         add_textbox(slide, cx + Inches(0.12), kpi_top + Inches(0.35),
-                    kpi_w - Inches(0.24), Inches(0.55),
-                    value, "Georgia", 26, bold=True, color=color)
+                    kpi_w - Inches(0.24), Inches(0.58),
+                    value, "Georgia", v_size, bold=True, color=color)
 
-    # Table
     systems = d["systems"]
     table_top = Inches(3.78)
     col_widths = [Inches(4.0), Inches(2.0), Inches(1.6), Inches(1.6), Inches(1.6)]
     headers = ["AI System", "Revenue/mo", "Cost/mo", "Setup", "ROI"]
     row_h = Inches(0.46)
 
-    # Header row
     x = LM
     for j, (header, cw) in enumerate(zip(headers, col_widths)):
-        cell = add_rect(slide, x, table_top, cw, row_h,
-                        fill_color=C_PURPLE)
+        add_rect(slide, x, table_top, cw, row_h, fill_color=C_PURPLE)
         add_textbox(slide, x + Inches(0.08), table_top + Inches(0.1),
                     cw - Inches(0.16), Inches(0.26),
                     header, "Calibri", 12, bold=True, color=C_WHITE)
         x += cw
 
-    # Data rows
     for r, sys in enumerate(systems):
         row_y = table_top + (r + 1) * row_h
         bg = C_DARK_CARD if r % 2 == 0 else RGBColor(0x24, 0x22, 0x3A)
@@ -1242,7 +1248,6 @@ def slide_revenue_summary(prs, d, slide_number):
                         text, "Calibri", 12, bold=bold, color=color)
             x += cw
 
-    # Total row
     total_y = table_top + (len(systems) + 1) * row_h
     total_data = [
         ("TOTAL",                   C_WHITE,  True),
@@ -1263,7 +1268,7 @@ def slide_revenue_summary(prs, d, slide_number):
 
 
 # ─────────────────────────────────────────────
-# BEFORE / AFTER TRANSFORMATION
+# TRANSFORMATION
 # ─────────────────────────────────────────────
 
 def slide_transformation(prs, d, slide_number):
@@ -1272,16 +1277,15 @@ def slide_transformation(prs, d, slide_number):
     add_accent_bar(slide, dark=False)
 
     add_section_label(slide, "THE TRANSFORMATION")
-    add_title(slide, "Before vs. After AI Systems", top=Inches(0.72), font_size=36)
+    add_title(slide, "Before vs. After AI Systems", top=TITLE_TOP, font_size=32, auto_shrink=True)
 
-    rows = d["transformation_rows"]  # list of 7: {label, current, with_ai}
-    table_top = Inches(1.85)
+    rows = d["transformation_rows"]
+    table_top = CONTENT_TOP
     row_h = Inches(0.5)
     label_w = Inches(4.5)
     val_w = Inches(3.8)
     header_h = Inches(0.45)
 
-    # Header
     add_rect(slide, LM, table_top, label_w + val_w * 2 + Inches(0.04),
              header_h, fill_color=C_DARK_TEXT)
     add_textbox(slide, LM + label_w + Inches(0.1), table_top + Inches(0.08),
@@ -1321,13 +1325,11 @@ def slide_guarantee(prs, d, slide_number):
     slide = new_slide(prs)
     add_rect(slide, 0, 0, W, H, fill_color=C_DARK_BG)
 
-    # Teal border lines top and bottom
     add_rect(slide, Inches(0.5), Inches(0.25), W - Inches(1.0), Inches(0.06),
              fill_color=C_TEAL)
     add_rect(slide, Inches(0.5), H - Inches(0.31), W - Inches(1.0), Inches(0.06),
              fill_color=C_TEAL)
 
-    # Inner card
     add_rounded_rect(slide, Inches(0.5), Inches(0.35),
                      W - Inches(1.0), H - Inches(0.7),
                      fill_color=C_DARK_CARD, radius_pt=6)
@@ -1336,48 +1338,66 @@ def slide_guarantee(prs, d, slide_number):
                 "OUR GUARANTEE", "Arial", 11, bold=True, color=C_PURPLE,
                 align=PP_ALIGN.CENTER)
 
-    # Headline
     add_textbox(slide, Inches(1.0), Inches(0.88), W - Inches(2.0), Inches(1.65),
                 d["guarantee_headline"],
-                "Georgia", 44, bold=True, color=C_WHITE, align=PP_ALIGN.CENTER)
+                "Georgia", 40, bold=True, color=C_WHITE, align=PP_ALIGN.CENTER)
 
-    # Italic subline
-    add_textbox(slide, Inches(1.0), Inches(2.6), W - Inches(2.0), Inches(0.48),
+    add_textbox(slide, Inches(1.0), Inches(2.7), W - Inches(2.0), Inches(0.48),
                 "Or we work for free until you do.",
-                "Georgia", 24, italic=True, color=C_GREEN, align=PP_ALIGN.CENTER)
+                "Georgia", 22, italic=True, color=C_GREEN, align=PP_ALIGN.CENTER)
 
-    # Math box — 3 equally-spaced rows inside, fills bottom ~40% of card
-    math_y = Inches(3.22)
-    math_h = H - Inches(0.7) - math_y + Inches(0.35) - Inches(0.1)
-    add_rounded_rect(slide, Inches(1.5), math_y, W - Inches(3.0), math_h,
+    # Math box — 3 tightly-packed rows. Rewrote so label + value appear as
+    # two runs on a single paragraph (value coloured green), instead of the
+    # earlier version where values were plain white inside one combined run.
+    math_y = Inches(3.45)
+    math_w = W - Inches(3.0)
+    math_h = Inches(3.1)
+    add_rounded_rect(slide, Inches(1.5), math_y, math_w, math_h,
                      fill_color=RGBColor(0x28, 0x26, 0x42), radius_pt=4)
 
-    # THE MATH label centred at top of box
-    add_textbox(slide, Inches(1.7), math_y + Inches(0.14), W - Inches(3.4), Inches(0.28),
+    add_textbox(slide, Inches(1.7), math_y + Inches(0.18), math_w - Inches(0.4), Inches(0.3),
                 "THE MATH", "Arial", 11, bold=True, color=C_MUTED,
                 align=PP_ALIGN.CENTER)
 
-    # Row spacing: 3 content rows evenly across remaining height
-    row_h = (math_h - Inches(0.52)) / 3
-    for idx, (label, value) in enumerate([
-        (f"Your 12-month investment:", d["guarantee_investment"]),
-        (f"Projected revenue in first 90 days:", d["guarantee_90day"]),
-        (f"That's {d['guarantee_surplus']} surplus — before you've even used 3 months.", ""),
-    ]):
-        ry = math_y + Inches(0.48) + idx * row_h
-        if idx < 2:
-            # Label + green value on same line
-            add_textbox(slide, Inches(1.7), ry, W - Inches(3.4), row_h,
-                        f"{label}  {value}", "Calibri", 17,
-                        color=C_WHITE if idx < 2 else C_GREEN)
-        else:
-            # Surplus line in green
-            add_textbox(slide, Inches(1.7), ry, W - Inches(3.4), row_h,
-                        label, "Calibri", 17, color=C_GREEN)
+    # Three rows with label (white) + value (green) on the same line.
+    math_items = [
+        (f"Your 12-month investment:", d["guarantee_investment"], C_WHITE, C_GREEN),
+        (f"Projected revenue in first 90 days:", d["guarantee_90day"], C_WHITE, C_GREEN),
+        (f"That's {d['guarantee_surplus']} surplus \u2014 before you've even used 3 months.",
+         "", C_GREEN, C_GREEN),
+    ]
+    row_start = math_y + Inches(0.7)
+    row_spacing = Inches(0.75)
+    for idx, (label, value, lcolor, vcolor) in enumerate(math_items):
+        ry = row_start + idx * row_spacing
+        # Compose label + value as two-run paragraph for correct colour
+        txBox = slide.shapes.add_textbox(Inches(1.7), ry,
+                                         math_w - Inches(0.4), Inches(0.5))
+        tf = txBox.text_frame
+        tf.word_wrap = True
+        p = tf.paragraphs[0]
+        p.alignment = PP_ALIGN.CENTER
+        run1 = p.add_run()
+        run1.text = label
+        run1.font.name = "Calibri"
+        run1.font.size = Pt(18)
+        run1.font.color.rgb = lcolor
+        if value:
+            run2 = p.add_run()
+            run2.text = "  " + value
+            run2.font.name = "Georgia"
+            run2.font.size = Pt(22)
+            run2.font.bold = True
+            run2.font.color.rgb = vcolor
+        # Zero padding
+        bodyPr = tf._txBody.find(_qn('a:bodyPr'))
+        if bodyPr is not None:
+            bodyPr.set('lIns', '0'); bodyPr.set('rIns', '0')
+            bodyPr.set('tIns', '0'); bodyPr.set('bIns', '0')
 
 
 # ─────────────────────────────────────────────
-# IMPLEMENTATION TIMELINE
+# IMPLEMENTATION
 # ─────────────────────────────────────────────
 
 def slide_implementation(prs, d, slide_number):
@@ -1386,12 +1406,12 @@ def slide_implementation(prs, d, slide_number):
     add_accent_bar(slide, dark=False)
 
     add_section_label(slide, "IMPLEMENTATION")
-    add_title(slide, "Live in 14 days. Results in 30.", top=Inches(0.72), font_size=36)
+    add_title(slide, "Live in 14 days. Results in 30.", top=TITLE_TOP, font_size=36)
 
-    phases = d["implementation_phases"]  # list of 3: {period, title, items[]}
+    phases = d["implementation_phases"]
     col_w = Inches(3.85)
     col_h = Inches(4.2)
-    col_top = Inches(1.7)
+    col_top = CONTENT_TOP
     gap = Inches(0.22)
 
     phase_colors = [C_PURPLE, C_GREEN, RGBColor(0x00, 0x88, 0xCC)]
@@ -1405,18 +1425,22 @@ def slide_implementation(prs, d, slide_number):
                     col_w - Inches(0.3), Inches(0.25),
                     phase["period"], "Arial", 10, bold=True,
                     color=phase_colors[i])
-        # Title
+        # Title — shrink font if title is long; reserve TWO lines of room
+        # so the first item never collides with a wrapped title.
+        title_text = phase["title"]
+        title_fs = 17 if len(title_text) <= 26 else (15 if len(title_text) <= 34 else 13)
+        title_h = Inches(0.85)   # enough for 2 lines at 15pt
         add_textbox(slide, cx + Inches(0.15), col_top + Inches(0.4),
-                    col_w - Inches(0.3), Inches(0.38),
-                    phase["title"], "Georgia", 17, bold=True, color=C_DARK_TEXT)
-        # Items
+                    col_w - Inches(0.3), title_h,
+                    title_text, "Georgia", title_fs, bold=True, color=C_DARK_TEXT)
+        # Items start below the reserved title area (was 0.9 — now 1.35)
+        items_top = col_top + Inches(1.35)
         for j, item in enumerate(phase["items"]):
-            add_textbox(slide, cx + Inches(0.15), col_top + Inches(0.9) + j * Inches(0.42),
+            add_textbox(slide, cx + Inches(0.15), items_top + j * Inches(0.42),
                         col_w - Inches(0.3), Inches(0.38),
-                        "→  " + item, "Calibri", 12, color=C_DARK_TEXT)
+                        "\u2192  " + item, "Calibri", 12, color=C_DARK_TEXT)
 
-    # Closing line
-    add_textbox(slide, LM, Inches(6.1), W - LM - RM, Inches(0.35),
+    add_textbox(slide, LM, col_top + col_h + Inches(0.15), W - LM - RM, Inches(0.35),
                 d["implementation_closing"], "Calibri", 13, italic=True,
                 color=C_MUTED, align=PP_ALIGN.CENTER)
 
@@ -1448,22 +1472,18 @@ def slide_next_steps(prs, d, slide_number):
         cx = LM + i * (card_w + gap)
         add_rounded_rect(slide, cx, top_y, card_w, card_h,
                          fill_color=C_DARK_CARD, radius_pt=6)
-        # Big number
         add_textbox(slide, cx + Inches(0.18), top_y + Inches(0.15),
                     card_w - Inches(0.36), Inches(1.0),
                     str(i + 1), "Georgia", 60, bold=True, color=C_PURPLE)
-        # Title
         add_textbox(slide, cx + Inches(0.18), top_y + Inches(1.18),
                     card_w - Inches(0.36), Inches(0.46),
                     step["title"], "Calibri", 14, bold=True, color=C_WHITE)
-        # Description
         add_textbox(slide, cx + Inches(0.18), top_y + Inches(1.68),
                     card_w - Inches(0.36), Inches(1.8),
                     step["description"], "Calibri", 12, color=C_MUTED)
 
-    # CTA pinned near bottom
     add_textbox(slide, LM, Inches(5.85), W - LM - RM, Inches(0.32),
-                f"{d['cta_url']}  ·  {d['cta_label']}",
+                f"{d['cta_url']}  \u00b7  {d['cta_label']}",
                 "Calibri", 13, color=C_MUTED, align=PP_ALIGN.CENTER)
 
 
@@ -1476,11 +1496,15 @@ def slide_closing(prs, d, slide_number):
     add_rect(slide, 0, 0, W, H, fill_color=C_DARK_BG)
     add_accent_bar(slide, dark=True)
 
-    add_textbox(slide, LM, Inches(1.8), W - LM - RM, Inches(1.4),
+    # Urgency line — uses safe multi-line rendering; width reduced to prevent
+    # single giant run. Height is generous so 3-4 wrapped lines fit.
+    add_textbox(slide, LM, Inches(1.6), W - LM - RM, Inches(2.6),
                 d["closing_urgency_line"],
-                "Georgia", 32, bold=True, color=C_WHITE, align=PP_ALIGN.CENTER)
+                "Georgia", 28, bold=True, color=C_WHITE, align=PP_ALIGN.CENTER)
 
-    add_textbox(slide, LM, Inches(3.35), W - LM - RM, Inches(0.8),
+    # CTA — pushed to its own y-band well below the urgency block so they
+    # cannot overlap no matter how long the urgency copy is.
+    add_textbox(slide, LM, Inches(4.6), W - LM - RM, Inches(1.0),
                 d["closing_cta"],
                 "Georgia", 44, bold=True, color=C_GREEN, align=PP_ALIGN.CENTER)
 
@@ -1494,15 +1518,10 @@ def slide_closing(prs, d, slide_number):
 # ─────────────────────────────────────────────
 
 def generate(data, output_path="output.pptx"):
-    """
-    Build the complete Revenue Leak Audit deck from a data dictionary.
-    See DATA_SCHEMA below for all required keys.
-    """
     prs = Presentation()
     prs.slide_width = W
     prs.slide_height = H
 
-    # Slides 1–11 (fixed)
     slide_01_cover(prs, data)
     slide_02_agenda(prs, data)
     slide_03_part_one(prs, data)
@@ -1514,32 +1533,26 @@ def generate(data, output_path="output.pptx"):
     slide_09_numbers(prs, data)
     slide_11_score(prs, data)
 
-    # Deep dive slides (variable count)
     current_slide = 11
     for dive in data["deep_dives"]:
         slide_deep_dive(prs, data, dive, current_slide)
         current_slide += 1
 
-    # Slide 15 equivalent (bottom line)
     slide_15_bottom_line(prs, data)
     current_slide += 1
 
-    # Part three divider
     slide_16_part_three(prs, data)
     current_slide += 1
 
-    # How it works
     slide_17_how_it_works(prs, data)
     current_slide += 1
 
-    # System slides (variable count)
     systems = data["systems"]
     total_systems = len(systems)
     for i, sys in enumerate(systems):
         slide_system(prs, data, sys, i + 1, total_systems, current_slide)
         current_slide += 1
 
-    # Summary, transformation, guarantee, implementation, next steps, closing
     slide_revenue_summary(prs, data, current_slide); current_slide += 1
     slide_transformation(prs, data, current_slide);  current_slide += 1
     slide_guarantee(prs, data, current_slide);        current_slide += 1
@@ -1548,222 +1561,224 @@ def generate(data, output_path="output.pptx"):
     slide_closing(prs, data, current_slide)
 
     prs.save(output_path)
-    print(f"✓ Saved: {output_path}  ({current_slide} slides)")
+    print(f"\u2713 Saved: {output_path}  ({current_slide} slides)")
     return output_path
 
 
 # ─────────────────────────────────────────────
-# DATA_SCHEMA — full example (Law Biz / Legal)
+# TEST DATA — matches the deployed RE Business LLC deck
 # ─────────────────────────────────────────────
 
-EXAMPLE_DATA = {
-    # ── Identity ──────────────────────────────
-    "brand_name":    "Booked Solid AI",
-    "client_name":   "Law Biz",
-    "prepared_for":  "the Directors",
-    "date":          "15 April 2026",
-    "cta_url":       "bookedsolidai.com.au/your-plan",
+TEST_DATA = {
+    "brand_name":    "justin.babcock98@gmail.com",
+    "client_name":   "RE Business LLC",
+    "prepared_for":  "Justin Babcock",
+    "date":          "21 April 2026",
+    "cta_url":       "agencypartnerhub.lovable.app/p/justin-babcock98-gmail-com",
     "cta_label":     "Your personalised bot selector is ready",
-    "brand_line":    "Booked Solid AI  ·  bookedsolidai.com.au",
+    "brand_line":    "justin.babcock98@gmail.com  \u00b7  agencypartnerhub.lovable.app",
 
-    # ── Industry language ─────────────────────
-    "term_client":       "prospect",
-    "term_client_pl":    "prospects",
-    "term_engagement":   "consultation",
-    "term_ongoing":      "case",
-    "term_completing":   "closing the case",
-    "term_practitioner": "attorney",
-    "term_business":     "firm",
-    "bottom_line_biz_word": "firm",
+    "term_client":       "lead",
+    "term_client_pl":    "leads",
+    "term_engagement":   "appraisal",
+    "term_ongoing":      "listing",
+    "term_completing":   "settling the sale",
+    "term_practitioner": "agent",
+    "term_business":     "agency",
+    "bottom_line_biz_word": "agency",
 
-    # ── Agenda ────────────────────────────────
-    "agenda_01_desc": "The legal prospect journey and where cases are lost",
+    "agenda_01_desc": "The buyer & vendor journey and where deals slip through",
 
-    # ── Part One content ──────────────────────
     "part_one_title":    "Your Industry &\nThe Client Journey",
-    "part_one_subtitle": "Understanding where revenue leaks in a law firm",
+    "part_one_subtitle": "Understanding where revenue leaks in a real estate agency",
 
-    # ── Journey (Slide 4) ─────────────────────
-    "journey_label":   "THE PROSPECTIVE CLIENT JOURNEY",
-    "journey_title":   "How a legal prospect finds you — and where they drop off",
+    "journey_label":   "THE BUYER & VENDOR JOURNEY",
+    "journey_title":   "How a real estate lead finds you \u2014 and where they drop off",
     "journey_stages": [
-        {"name": "AWARENESS",     "desc": "Google, referral,\nword of mouth",       "pct_lost": None,  "reason": ""},
-        {"name": "ENQUIRY",       "desc": "Calls, web form,\nlive chat",            "pct_lost": "42%", "reason": "No response / too slow"},
-        {"name": "RESPONSE",      "desc": "Firm responds",                          "pct_lost": "25%", "reason": "Never followed up"},
-        {"name": "CONSULTATION",  "desc": "Free case\nevaluation",                  "pct_lost": None,  "reason": ""},
-        {"name": "RETAINER",      "desc": "Signs and pays\nretainer",              "pct_lost": "45%", "reason": "Went with faster competitor"},
-        {"name": "LIFETIME",      "desc": "Referrals, reviews,\nrepeat matters",   "pct_lost": "85%", "reason": "No referral or review ask"},
+        {"name": "AWARENESS",    "desc": "Portals, signs,\nreferrals",               "pct_lost": None,  "reason": ""},
+        {"name": "ENQUIRY",      "desc": "Portal lead, web form,\nappraisal request","pct_lost": "48%", "reason": "No response in first 5 min"},
+        {"name": "RESPONSE",     "desc": "Agent calls back",                          "pct_lost": "30%", "reason": "Never followed up again"},
+        {"name": "APPRAISAL",    "desc": "In-home appraisal\nor inspection",          "pct_lost": None,  "reason": ""},
+        {"name": "LISTING",      "desc": "Signs authority\nor buyer agreement",       "pct_lost": "50%", "reason": "Listed with faster agent"},
+        {"name": "LIFETIME",     "desc": "Referrals, repeat,\nfuture transactions",   "pct_lost": "80%", "reason": "No post-settlement contact"},
     ],
-    "journey_closing": "Every red zone is a case fee you generated interest for — but never collected.",
+    "journey_closing": "Every red zone is a commission you generated interest for \u2014 but never collected.",
 
-    # ── Industry Stats (Slide 5) ──────────────
-    "stat_section_label": "LEGAL INDUSTRY DATA",
+    "stat_section_label": "REAL ESTATE INDUSTRY DATA",
     "industry_stats": [
-        {"number": "26%",    "label": "of law firms don't respond to online leads at all — and 39% take more than 2 hours, handing cases to faster competitors", "source": "Hennessey Digital Lead Form Response Study, 2025"},
-        {"number": "42%",    "label": "of potential client enquiries arrive outside business hours — evenings, weekends, holidays — and go completely unanswered", "source": "Ruby Receptionists, 2025"},
-        {"number": "14%",    "label": "average lead-to-retainer conversion across law firms — top-performing firms achieve 40–50% by fixing speed and follow-up", "source": "Clio Legal Trends Report, 2025"},
-        {"number": "$200k+", "label": "lost annually by the average multi-attorney firm to unanswered calls and slow response, before any marketing spend is wasted", "source": "Lead Docket Case Studies, 2025"},
+        {"number": "48%",   "label": "of real estate leads are never contacted at all \u2014 most go to whichever agent calls first, not the one who was emailed first", "source": "NAR Real Estate Lead Response Study, 2025"},
+        {"number": "5min",  "label": "window before a portal lead's interest drops by 80% \u2014 most agents take 30+ minutes to respond and lose the listing",            "source": "Harvard Business Review Lead Response Research"},
+        {"number": "12%",   "label": "average conversion from enquiry to signed authority \u2014 top agencies hit 30%+ by fixing speed, follow-up, and nurture",           "source": "REB Agency Benchmarks, 2025"},
+        {"number": "8x",    "label": "more likely to win a listing when you're the first agent to respond vs the third \u2014 speed-to-lead is the single biggest predictor", "source": "Zillow Premier Agent Data, 2024"},
     ],
 
-    # ── Lifecycle (Slide 6) ───────────────────
-    "lifecycle_title":   "A prospect isn't a one-time transaction — it's a lifecycle",
-    "lifecycle_intro":   "Most firms only focus on generating new enquiries. But sustainable revenue comes from managing the full client lifecycle — and most practices have no systems for the stages marked below.",
+    "lifecycle_title":   "A lead isn't a one-time transaction \u2014 it's a lifecycle",
+    "lifecycle_intro":   "Most agencies only focus on winning the next listing. But sustainable GCI comes from managing the full client lifecycle \u2014 and most offices have no systems for the stages marked below.",
     "lifecycle_stages": [
-        {"name": "ATTRACT",  "desc": "Google Ads, SEO,\nreferrals bring enquiries",   "status": "WORKING"},
-        {"name": "CAPTURE",  "desc": "Answer calls,\nrespond to web forms fast",      "status": "WORKING"},
-        {"name": "NURTURE",  "desc": "Follow up prospects\nwho didn't retain",        "status": "NO SYSTEM"},
-        {"name": "CONVERT",  "desc": "Book consultation,\ncollect intake info",       "status": "MANUAL"},
-        {"name": "RETAIN",   "desc": "Keep clients updated\nthrough case lifecycle",  "status": "NO SYSTEM"},
-        {"name": "GROW",     "desc": "Reviews, referrals\nfrom closed cases",         "status": "NO SYSTEM"},
+        {"name": "ATTRACT", "desc": "Portal spend, signs,\nfarm area marketing",  "status": "WORKING"},
+        {"name": "CAPTURE", "desc": "Answer calls,\nrespond to portal leads",      "status": "WORKING"},
+        {"name": "NURTURE", "desc": "Follow up leads\nwho didn't list/buy yet",    "status": "NO SYSTEM"},
+        {"name": "CONVERT", "desc": "Book appraisal,\nwin the listing",            "status": "MANUAL"},
+        {"name": "RETAIN",  "desc": "Keep vendors/buyers\nupdated through deal",   "status": "NO SYSTEM"},
+        {"name": "GROW",    "desc": "Reviews, referrals,\nrepeat transactions",    "status": "NO SYSTEM"},
     ],
-    "lifecycle_summary": "4 of 6 lifecycle stages have no system. You're paying to attract prospects, then losing them to faster-responding competitors.",
+    "lifecycle_summary": "4 of 6 lifecycle stages have no system. You're paying to attract leads, then losing them to faster-responding agents.",
 
-    # ── Funnel (Slide 7) ─────────────────────
     "funnel_rows": [
-        {"label": "Monthly Enquiries (calls + web + referrals)", "value": 15,  "lost": "-5 lost"},
-        {"label": "Answered / Responded To (within 1hr)",        "value": 10,  "lost": "-7 lost"},
-        {"label": "Actually Followed Up (if didn't retain)",      "value": 3,   "lost": "-2 lost"},
-        {"label": "Booked Free Consultation",                     "value": 1,   "lost": ""},
-        {"label": "Signed Retainer",                              "value": 1,   "lost": None},
+        {"label": "Monthly Enquiries (portal + web + signs)", "value": 15, "lost": "-5 lost"},
+        {"label": "Answered / Responded To (within 1hr)",     "value": 10, "lost": "-4 lost"},
+        {"label": "Actually Followed Up (if didn't list)",    "value": 6,  "lost": "-5 lost"},
+        {"label": "Booked Appraisal / Inspection",            "value": 1,  "lost": ""},
+        {"label": "Signed Authority / Agreement",             "value": 1,  "lost": None},
     ],
-    "funnel_insight": "14 of 15 enquiries never result in a signed retainer. That's 93% of marketing spend generating zero return — not because of bad leads, but because of missing systems.",
+    "funnel_insight": "Of 15 monthly enquiries, only 10 get a response, 6 see follow-up, and just 1 books an appraisal \u2014 a 93% drop-off between the top of the funnel and a signed listing.",
 
-    # ── Your Numbers (Slide 9) ────────────────
     "number_cards": [
-        {"value": "15",    "label": "Monthly Enquiries",                    "subnote": "Calls, web forms, CRM, referrals"},
-        {"value": "~8",    "label": "Missed / Unanswered\nCalls per Month", "subnote": "No after-hours coverage"},
-        {"value": "6%",    "label": "Close Rate\n(enquiry → retainer)",     "subnote": "1 client from 15 enquiries"},
-        {"value": "$100",  "label": "Average First\nConsultation Fee",      "subnote": "Initial case evaluation"},
-        {"value": "$12,000","label": "Avg Case Value",                      "subnote": "Avg deal / contract value"},
-        {"value": "44%",   "label": "Retainer\nConversion Rate",            "subnote": "56% of consultations don't convert"},
+        {"value": "15",      "label": "Monthly Enquiries",                        "subnote": "Portal, web, signs, referrals"},
+        {"value": "~2",      "label": "Missed / Unanswered\nCalls per Month",    "subnote": "No after-hours coverage"},
+        {"value": "7%",      "label": "Close Rate\n(enquiry \u2192 authority)",  "subnote": "From enquiry to signed authority"},
+        {"value": "$150",    "label": "Average First\nAppraisal Value",          "subnote": "Time-cost of an appraisal"},
+        {"value": "$12,000", "label": "Avg Commission per Sale",                 "subnote": "GCI per transaction"},
+        {"value": "99%",     "label": "Listing\nConversion Rate",                "subnote": "From appraisal to authority"},
     ],
 
-    # ── Audit Methodology (Slide 10) ──────────
     "audit_tests": [
-        {"name": "Phone Call Test (business hours)",  "finding": "Called at 11am Wednesday. Rang 7 times.\nVoicemail — callback took 2+ hours"},
-        {"name": "Phone Call Test (after hours)",     "finding": "Called at 6:30pm Thursday.\nVoicemail — no callback until next morning"},
+        {"name": "Phone Call Test (business hours)",  "finding": "Called at 11am Wednesday. Rang 7 times.\nVoicemail \u2014 callback took 2+ hours"},
+        {"name": "Phone Call Test (after hours)",     "finding": "Called at 6:30pm Thursday.\nVoicemail \u2014 no callback until next morning"},
         {"name": "Web Enquiry Test",                  "finding": "Submitted web form at 10am Tuesday.\nEmail reply 4 hours later, no phone call"},
-        {"name": "CRM Lead Flow Test",                "finding": "Tested CRM intake flow end-to-end.\nWorks but no confirmation SMS sent"},
+        {"name": "Portal Lead Flow Test",             "finding": "Tested portal intake flow end-to-end.\nWorks but no confirmation SMS sent"},
         {"name": "Follow-Up Persistence",             "finding": "After web form, we didn't respond.\nZero follow-up attempts received"},
-        {"name": "Google Review Audit",               "finding": "Compared profile vs top 5 local competitors.\nFewer reviews than top local law firms"},
+        {"name": "Google Review Audit",               "finding": "Compared profile vs top 5 local agents.\nFewer reviews than top local agencies"},
     ],
 
-    # ── AI Readiness Score (Slide 11) ─────────
-    "overall_score": 24,
-    "score_status_label": "CRITICAL — IMMEDIATE\nACTION NEEDED",
+    "overall_score": 38,
+    "score_status_label": "CRITICAL \u2014 IMMEDIATE\nACTION NEEDED",
     "dimensions": [
-        {"name": "Speed to Lead",        "weight": "25%", "score": 16},
-        {"name": "Follow-Up Systems",    "weight": "20%", "score": 8},
-        {"name": "Pipeline Visibility",  "weight": "15%", "score": 45},
-        {"name": "Client Communication", "weight": "15%", "score": 35},
-        {"name": "Post-Case Nurture",    "weight": "15%", "score": 20},
-        {"name": "Automation Maturity",  "weight": "10%", "score": 35},
+        {"name": "Speed to Lead",         "weight": "25%", "score": 46},
+        {"name": "Follow-Up Systems",     "weight": "20%", "score": 50},
+        {"name": "Pipeline Visibility",   "weight": "15%", "score": 45},
+        {"name": "Vendor & Buyer Comm.",  "weight": "15%", "score": 23},
+        {"name": "Post-Settlement Nurture","weight": "15%", "score": 20},
+        {"name": "Automation Maturity",   "weight": "10%", "score": 35},
     ],
     "key_findings": [
-        "~8 calls/month going unanswered with no after-hours coverage whatsoever",
-        "Only 1–2 follow-up touches after initial contact — leads fall through the cracks",
-        "No automated follow-up after unconverted web enquiries — leads simply abandoned",
-        "Fewer Google reviews than top local competing law firms",
-        "No system for re-engaging past clients or generating referrals post-case",
+        "Overall sales maturity scores 38 out of 100, with Post-Settlement Nurture bottoming out at 20.",
+        "$5,922 in revenue leaks out of the agency every month, or $71,064 annually \u2014 47% of what you should be earning.",
+        "Only 1 of 15 monthly enquiries converts to a booked appraisal, a 93% funnel drop-off.",
+        "Response time sits in the 5-30 minute window, well past the 5-minute threshold where lead conversion collapses.",
+        "With a 7% close rate on $12,000 average deals, each recovered lead is worth real money \u2014 GoHighLevel is currently underused.",
     ],
 
-    # ── Deep Dives (one per dimension < 40) ───
     "deep_dives": [
         {
-            "score": 16,
-            "name": "Speed to Lead",
-            "subtitle": "How fast you respond",
+            "score": 23,
+            "name": "Vendor & Buyer Communication",
+            "subtitle": "Vendor & Buyer Communication",
             "sub_scores": [
-                {"score": 15, "label": "Phone answer rate (business hrs)", "note": "~60% answered, long ring times"},
-                {"score": 0,  "label": "After-hours handling",             "note": "None — voicemail only"},
-                {"score": 15, "label": "Web enquiry response time",        "note": "2–4 hours, email only"},
-                {"score": 20, "label": "CRM follow-up automation",         "note": "Manual only, no sequences"},
+                {"score": 28, "label": "Cadence Consistency",  "note": "Touchpoints are ad hoc, not scheduled."},
+                {"score": 22, "label": "Channel Mix",          "note": "Email-heavy, minimal SMS or voice."},
+                {"score": 20, "label": "Template Quality",     "note": "No branded, niche-specific templates in use."},
+                {"score": 22, "label": "Response Handling",    "note": "Inbound vendor replies often sit over 24 hours."},
             ],
-            "audit_finding": "We called Law Biz during business hours and reached voicemail. Callback took 2+ hours. After-hours test: voicemail, no callback until the following morning. Legal prospects contact multiple firms — the first to respond wins 79% of the time.",
-            "revenue_impact": "With ~8 missed calls per month, recovering 50% at a 20% retainer rate = 1 additional case per month = $12,000/month in case value. Even one recovered case covers the entire AI system investment.",
-        },
-        {
-            "score": 8,
-            "name": "Follow-Up Systems",
-            "subtitle": "Follow-up persistence",
-            "sub_scores": [
-                {"score": 0,  "label": "Follow-up attempts",          "note": "1–2 touches maximum"},
-                {"score": 0,  "label": "Unconverted lead nurturing",   "note": "None — leads abandoned"},
-                {"score": 20, "label": "Channels used for follow-up",  "note": "Email only, no SMS"},
-                {"score": 15, "label": "Cancellation recovery",        "note": "Manual, inconsistent"},
-            ],
-            "audit_finding": "After our web enquiry test, we received one email, then silence. No SMS follow-up, no multi-touch sequence, no phone callback. With approximately 12 unconverted enquiries per month, you're abandoning thousands in potential retainer revenue without a single follow-up.",
-            "revenue_impact": "A 7-touch automated nurture sequence typically converts 20–30% of unconverted legal leads. At 12 unconverted enquiries, that's 2–4 extra retained cases per month = $24,000–$48,000/month from leads already paid for.",
+            "audit_finding":  "RE Business LLC relies on the agent's manual discipline to keep vendors and buyers informed between appraisal and settlement. With 15 enquiries monthly, the cracks show fast \u2014 leads feel ignored and walk to competitors who communicate proactively.",
+            "revenue_impact": "Communication gaps are a core driver of the $5,922 monthly leak. Even recovering 2 of every 15 leads at a $12,000 deal value and 7% close rate meaningfully lifts monthly revenue above the current $10,500.",
         },
         {
             "score": 20,
-            "name": "Post-Case Nurture",
-            "subtitle": "After the case closes",
+            "name": "Post-Settlement Nurture",
+            "subtitle": "Post-Settlement Nurture",
             "sub_scores": [
-                {"score": 5,  "label": "Client re-engagement system", "note": "None — clients self-manage"},
-                {"score": 10, "label": "Review collection",            "note": "Rarely asked, no system"},
-                {"score": 0,  "label": "Referral program",             "note": "None"},
-                {"score": 20, "label": "Lapsed client reactivation",   "note": "Occasional email, no system"},
+                {"score": 18, "label": "Referral Asks",          "note": "No systematic referral trigger after settling the sale."},
+                {"score": 20, "label": "Review Capture",          "note": "Reviews collected sporadically, not automated."},
+                {"score": 22, "label": "Anniversary Touches",    "note": "No 12-month check-in cadence in place."},
+                {"score": 20, "label": "Reactivation",            "note": "Past clients never re-engaged for new listings."},
             ],
-            "audit_finding": "Law Biz has no automated review requests, no referral incentive program, no check-in after case closure, and no reactivation campaign for past clients. Legal referrals are the highest-quality, lowest-cost lead source — and there's no system to generate them.",
-            "revenue_impact": "Reactivating 5% of past clients = 2–3 return matters per month = $24,000–$36,000/month. Reviews driving organic search = 3–5 new enquiries/month. This dimension alone could recover $5,000+/month.",
+            "audit_finding":  "Scoring 20 out of 100, Post-Settlement Nurture is the single biggest weakness at RE Business LLC. Once a sale settles, the lead relationship effectively ends \u2014 no reviews, no referrals, no reactivation pipeline feeding future listings.",
+            "revenue_impact": "A Review Bot and reactivation layer alone is modeled at $2,400 in monthly revenue, a direct recovery of a large slice of the $5,922 monthly leak.",
+        },
+        {
+            "score": 35,
+            "name": "Automation Maturity",
+            "subtitle": "Automation Maturity",
+            "sub_scores": [
+                {"score": 38, "label": "GoHighLevel Utilization", "note": "Platform in place, workflows underbuilt."},
+                {"score": 32, "label": "Lead Routing",             "note": "No instant routing to agent on hot enquiries."},
+                {"score": 35, "label": "Sequence Depth",           "note": "Only 3-5 touches per lead, no branching logic."},
+                {"score": 35, "label": "Reporting",                "note": "No automated leak or conversion dashboards."},
+            ],
+            "audit_finding":  "GoHighLevel is already paid for at RE Business LLC but operating at a fraction of its capability. Without deeper automation, the agency cannot scale beyond its current under-20 monthly lead volume.",
+            "revenue_impact": "Activating proper automation unlocks the modeled $8,100 net monthly gain and keeps the $71,064 annual leak from repeating next year.",
         },
     ],
 
-    # ── Bottom Line (Slide 15) ────────────────
-    "annual_leak":          "$60,480",
-    "bottom_line_context":  "That's $5,040 every month in recoverable revenue from missed calls, abandoned leads, prospects going to faster competitors, a dormant database of past clients, and a reputation falling behind local law firms.",
+    "annual_leak":          "$71,064",
+    "bottom_line_context":  "This breakdown accounts for the $5,922 in monthly revenue leaking out of RE Business LLC across slow lead response, weak follow-up, and zero post-settlement nurture. Annualized, that is $71,064 walking out the door every year.",
     "closing_line":         "The question isn't whether you can afford AI systems.\nIt's whether you can afford not to have them.",
 
-    # ── How It Works (Slide 17) ───────────────
-    "before_dropoff_pct":     "56% drop off",
-    "after_step_5":           "Retention bot\nkeeps cases moving",
-    "how_it_works_closing":   "Every stage is automated. Your team focuses on winning cases — AI handles the rest.",
+    "before_dropoff_pct":     "47% drop off",
+    "after_step_5":           "Vendor update bot\nkeeps listings active",
+    "how_it_works_closing":   "Every stage is automated. Your team focuses on winning listings \u2014 AI handles the rest.",
 
-    # ── Systems ───────────────────────────────
     "systems": [
         {
             "name":            "AI Receptionist",
-            "label":           "PHASE 1 — CORE",
-            "metric_label":    "recovered calls →\nretainers/mo",
-            "metric_value":    "4",
+            "label":           "PHASE 1 \u2014 CORE",
+            "metric_label":    "minute response\nwindow target",
+            "metric_value":    "5",
             "monthly_revenue": "$4,500",
             "monthly_cost":    "$1,000",
             "setup_fee":       "$2,000",
             "roi":             "4.5x",
-            "description":     "Your AI-powered intake desk that never misses a call. Answers within 3 rings 24/7, qualifies the legal matter using natural conversation, checks CRM availability, and books consultations — all without human intervention. After hours, captures every enquiry and triggers instant SMS + email confirmation.",
-            "steps":           ["Prospect calls\n(any hour)", "AI qualifies\nmatter type", "Books consultation,\nsends SMS", "Intake form\nsent automatically", "Attorney alerted\nwith full summary"],
-            "audit_finding":   "We called Law Biz during business hours and reached voicemail with a 2-hour callback. After hours: voicemail until next morning. ~8 calls/month going unanswered — each one a potential $12,000 case.",
+            "description":     "An always-on AI receptionist that answers inbound enquiries within seconds, qualifies the lead, and books appraisals straight into the agent's calendar. Sits on top of GoHighLevel so nothing is replaced \u2014 only accelerated.",
+            "steps":           [
+                "Capture inbound\nenquiry across\nweb, SMS, voice",
+                "Qualify lead with\nniche-specific\nquestions",
+                "Route hot leads\nto agent instantly",
+                "Book appraisal\ndirectly into\ncalendar",
+                "Log everything\ninto GoHighLevel",
+            ],
+            "audit_finding":   "With response time sitting in the 5-30 minute band and 2 missed calls per month, RE Business LLC is losing leads before the agent even sees them. An AI receptionist closes that gap and is modeled at $4,500 monthly revenue recovery.",
         },
         {
             "name":            "Lead Nurture Bot",
-            "label":           "PHASE 2 — NURTURE",
-            "metric_label":    "extra retainers from\nunconverted leads/mo",
-            "metric_value":    "3",
+            "label":           "PHASE 2 \u2014 NURTURE",
+            "metric_label":    "automated touches\nper lead",
+            "metric_value":    "10+",
             "monthly_revenue": "$3,600",
             "monthly_cost":    "$600",
             "setup_fee":       "$1,500",
             "roi":             "6.0x",
-            "description":     "A 7-touch automated follow-up sequence for every enquiry that doesn't retain on first contact. Uses SMS + email over 21 days, handles objections around cost and timing, includes social proof from past client outcomes, and creates urgency with limited consultation availability.",
-            "steps":           ["Lead enquires but\ndoesn't retain", "Instant: SMS +\nemail with booking link", "Days 1–3: Value\ncontent + FAQs", "Days 7–14:\nAddress objections", "Day 21: Final\nurgency message"],
-            "audit_finding":   "After our web enquiry test, we received one email then silence. Zero SMS follow-up. With ~12 unconverted enquiries/month, a 25% nurture conversion rate = 3 extra retained cases = $36,000/month in case value.",
+            "description":     "A multi-channel nurture bot that runs structured SMS, email, and voice sequences from first enquiry through settling the sale. Replaces the current 3-5 manual touches with a consistent cadence that never forgets a lead.",
+            "steps":           [
+                "Trigger sequence\non enquiry capture",
+                "Multi-channel touches\nacross SMS and email",
+                "Branch logic based\non lead behavior",
+                "Re-engage cold leads\nat 30, 60, 90 days",
+                "Hand warm leads\nback to the agent",
+            ],
+            "audit_finding":   "Only 6 of 15 monthly enquiries currently receive follow-up at RE Business LLC. A Lead Nurture Bot extends coverage to 100% of the pipeline and is modeled at $3,600 monthly revenue.",
         },
         {
             "name":            "Review Bot + Client Reactivation",
-            "label":           "ADD-ON — GROWTH",
-            "metric_label":    "new reviews/mo +\npast clients reactivated",
-            "metric_value":    "10+",
+            "label":           "ADD-ON \u2014 GROWTH",
+            "metric_label":    "reactivation touches\nper past client",
+            "metric_value":    "4",
             "monthly_revenue": "$2,400",
             "monthly_cost":    "$800",
             "setup_fee":       "$2,000",
             "roi":             "3.0x",
-            "description":     "Two systems working together: (1) automatically requests Google reviews from satisfied clients after case closure with one-tap links, (2) runs quarterly reactivation campaigns targeting past clients in the CRM with personalised win-back messages based on their case history.",
-            "steps":           ["Case closes\nsuccessfully", "Review bot sends\none-tap Google link", "Past clients get\nquarterly reactivation", "Personalised by\ncase type", "Dashboard tracks\nreviews + reactivations"],
-            "audit_finding":   "Fewer Google reviews than top local competing law firms. Years of past clients sitting untouched in CRM. Reactivating 5% of past clients = 2–3 new matters/month. Reviews driving SEO = 3–5 new organic enquiries/month.",
+            "description":     "Automated review capture the moment a sale settles, plus a reactivation engine that re-engages past clients for referrals, anniversary check-ins, and new listing opportunities. This is where Post-Settlement Nurture moves from 20 to best-in-class.",
+            "steps":           [
+                "Trigger review\nrequest at settlement",
+                "Route 5-star reviews\nto Google and Facebook",
+                "Schedule anniversary\ncheck-in touches",
+                "Re-engage past clients\nfor referrals",
+                "Surface reactivation\nleads to the agent",
+            ],
+            "audit_finding":   "With zero post-settlement workflow in place at RE Business LLC, every past client is a dormant asset. This system is modeled at $2,400 monthly revenue, directly attacking the weakest score on the audit.",
         },
     ],
 
-    # ── Revenue Summary ───────────────────────
     "total_monthly_revenue": "$10,500",
     "total_monthly_cost":    "$2,400",
     "total_setup_fees":      "$5,500",
@@ -1771,71 +1786,66 @@ EXAMPLE_DATA = {
     "annual_recovery":       "$97,200",
     "overall_roi":           "4.4x",
 
-    # ── Guarantee ─────────────────────────────
-    "guarantee_headline":  "Make your full 12-month investment back in 90 days.",
+    "guarantee_headline":   "Make your full 12-month investment back in 90 days.",
     "guarantee_investment": "$28,800",
     "guarantee_90day":      "$31,500",
     "guarantee_surplus":    "$2,700",
 
-    # ── Before / After Transformation ─────────
     "transformation_rows": [
-        {"label": "Missed calls/mo",       "current": "~8/month",        "with_ai": "< 2"},
-        {"label": "Response time",         "current": "2–4 hours",       "with_ai": "< 60 seconds"},
-        {"label": "After-hours coverage",  "current": "None",            "with_ai": "24/7 AI"},
-        {"label": "Follow-up touches",     "current": "1–2 emails",      "with_ai": "7-touch multi-channel"},
-        {"label": "Lead drop-off rate",    "current": "94%",             "with_ai": "< 60%"},
-        {"label": "Google reviews",        "current": "Low",             "with_ai": "200+ in 6 months"},
-        {"label": "Past client outreach",  "current": "None",            "with_ai": "Quarterly automated"},
+        {"label": "Response Time",         "current": "5-30 minutes",           "with_ai": "Under 60 seconds"},
+        {"label": "After-Hours Coverage",  "current": "Auto-reply only",         "with_ai": "24/7 qualification and booking"},
+        {"label": "Follow-Up Touches",     "current": "3-5 per lead",            "with_ai": "10+ multi-channel per lead"},
+        {"label": "Funnel Conversion",     "current": "1 of 15 enquiries booked","with_ai": "3-4 of 15 enquiries booked"},
+        {"label": "Post-Settlement Nurture","current": "None",                   "with_ai": "Automated reviews and reactivation"},
+        {"label": "Monthly Revenue Leak",  "current": "$5,922",                  "with_ai": "Recovered into pipeline"},
+        {"label": "Net Monthly Gain",      "current": "$0",                      "with_ai": "$8,100"},
     ],
 
-    # ── Implementation ────────────────────────
     "implementation_phases": [
         {
-            "period": "WEEK 1–2",
-            "title":  "Build & Deploy",
+            "period": "WEEK 1\u20132",
+            "title":  "Deploy AI Receptionist",
             "items":  [
-                "AI Receptionist goes live (24/7)",
-                "CRM integration complete",
-                "Smart consultation reminders on",
-                "Intake automation active",
+                "Integrate with GoHighLevel",
+                "Configure qualification script",
+                "Connect calendar booking",
+                "Go live on inbound channels",
             ],
         },
         {
-            "period": "WEEK 3–4",
-            "title":  "Nurture & Convert",
+            "period": "WEEK 3\u20134",
+            "title":  "Launch Lead Nurture Bot",
             "items":  [
-                "Lead nurture sequences live",
-                "Unconverted lead follow-up running",
-                "Cancellation/no-show recovery on",
-                "Team trained on dashboards",
+                "Build multi-channel sequences",
+                "Set branching logic by behavior",
+                "Migrate existing leads into cadence",
+                "Activate cold-lead re-engagement",
             ],
         },
         {
-            "period": "MONTH 2–3",
-            "title":  "Grow & Optimise",
+            "period": "MONTH 2\u20133",
+            "title":  "Add Review & Reactivation Layer",
             "items":  [
-                "Client reactivation campaigns running",
-                "Review generation bot launched",
-                "A/B test all messaging",
-                "Full ROI report delivered",
+                "Trigger post-settlement reviews",
+                "Build anniversary touch cadence",
+                "Launch past-client reactivation",
+                "Report on recovered revenue",
             ],
         },
     ],
     "implementation_closing": "Zero disruption to your team. We handle the entire build, CRM integration, and testing.",
 
-    # ── Next Steps ────────────────────────────
     "next_steps": [
-        {"title": "Select your systems",        "description": "Use the link we'll send you to choose which bots you want and customise your numbers."},
-        {"title": "We build everything in 14 days", "description": "Complete setup, CRM integration, and testing — zero work required from your team."},
-        {"title": "Revenue starts recovering",  "description": "Most clients see measurable results within the first 30 days."},
-        {"title": "90-day guarantee kicks in",  "description": "If you haven't made your 12-month investment back in 90 days, we work for free until you do."},
+        {"title": "Select your systems",            "description": "Use the link we'll send you to choose which bots you want and customise your numbers."},
+        {"title": "We build everything in 14 days", "description": "Complete setup, CRM integration, and testing \u2014 zero work required from your team."},
+        {"title": "Revenue starts recovering",      "description": "Most clients see measurable results within the first 30 days."},
+        {"title": "90-day guarantee kicks in",      "description": "If you haven't made your 12-month investment back in 90 days, we work for free until you do."},
     ],
 
-    # ── Closing ───────────────────────────────
-    "closing_urgency_line": "Every month without AI systems\n= $8,100 in lost revenue for Law Biz.",
-    "closing_cta":          "Let's fix it.",
+    "closing_urgency_line": "Every month without these systems costs RE Business LLC another $8,100 in net gain.\nThat is not a projection, that is the math on leads you are already paying to generate.",
+    "closing_cta":          "Let's plug the leaks.",
 }
 
 
 if __name__ == "__main__":
-    generate(EXAMPLE_DATA, "Law_Biz_Revenue_Audit_v1.pptx")
+    generate(TEST_DATA, "RE_Business_LLC_Revenue_Audit_FIXED.pptx")
