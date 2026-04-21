@@ -68,8 +68,6 @@ LOGO_PATH = os.path.join(os.path.dirname(__file__), "logo-full-dark.png")
 # Native pixel dimensions of logo-full-dark.png (used to preserve aspect ratio)
 LOGO_PX_W = 753
 LOGO_PX_H = 185
-# Faint opacity for the watermark (0.0–1.0). 0.10 ≈ 10% opacity.
-WATERMARK_OPACITY = 0.10
 
 # Margins
 LM = Inches(0.6)
@@ -226,14 +224,12 @@ def add_accent_bar(slide, dark=True):
     return bar
 
 
-def add_footer(slide, brand_name, slide_number):
+def add_footer(slide, brand_name, slide_number=None):
     footer_y = H - Inches(0.35)
     footer_h = Inches(0.25)
     add_textbox(slide, LM, footer_y, Inches(6), footer_h,
                 f"{brand_name}  \u00b7  Revenue Leak Audit  \u00b7  Confidential",
                 "Calibri", 10, color=C_MUTED)
-    add_textbox(slide, W - Inches(1.2), footer_y, Inches(0.8), footer_h,
-                str(slide_number), "Calibri", 10, color=C_MUTED, align=PP_ALIGN.RIGHT)
 
 
 def add_section_label(slide, text, left=None, top=Inches(0.45), dark=False):
@@ -339,40 +335,18 @@ def add_circle(slide, cx, cy, diameter, fill_color, text, text_color=C_WHITE,
     return shape
 
 
-def add_logo_watermark(slide, image_path=LOGO_PATH, opacity=WATERMARK_OPACITY,
-                       width_in=5.5):
-    """Place a faint, centered logo-full-dark.png watermark on the slide.
-
-    The image is faded via the OOXML <a:alphaModFix> element (no Pillow
-    dependency required) and then re-positioned in the slide's z-order so
-    it sits just above the slide background but behind any content shapes.
-    """
+def add_logo_watermark(slide, image_path=LOGO_PATH, width_in=1.8):
+    """Place the logo-full-dark.png mark in the bottom-right corner of the
+    slide at full opacity, where the slide number used to live."""
     if not os.path.exists(image_path):
         return None
 
     wm_w = Inches(width_in)
     wm_h = Emu(int(wm_w * LOGO_PX_H / LOGO_PX_W))
-    left = int((W - wm_w) / 2)
-    top  = int((H - wm_h) / 2)
+    left = W - wm_w - Inches(0.4)
+    top  = H - wm_h - Inches(0.15)
 
-    pic = slide.shapes.add_picture(image_path, left, top, width=wm_w, height=wm_h)
-
-    # Fade the picture by setting a fixed alpha on the underlying blip.
-    # alphaModFix amt is in 1000ths of a percent (100000 == 100%).
-    blipFill = pic._element.find(_qn('p:blipFill'))
-    if blipFill is not None:
-        blip = blipFill.find(_qn('a:blip'))
-        if blip is not None:
-            alphaModFix = etree.SubElement(blip, _qn('a:alphaModFix'))
-            alphaModFix.set('amt', str(int(opacity * 100000)))
-
-    # Send the watermark behind other content. The first real shape on every
-    # slide here is the full-bleed background rect, so insert immediately
-    # after it (index 3 of spTree: nvGrpSpPr, grpSpPr, background, …).
-    spTree = pic._element.getparent()
-    spTree.remove(pic._element)
-    spTree.insert(3, pic._element)
-    return pic
+    return slide.shapes.add_picture(image_path, left, top, width=wm_w, height=wm_h)
 
 
 # ─────────────────────────────────────────────
